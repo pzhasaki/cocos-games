@@ -1,0 +1,10 @@
+{
+  "engine": "cocos-creator-js",
+  "packages": "packages",
+  "name": "light-hero-douyin-cocos",
+  "uuid": "eac3f189-d0ef-42e0-9af0-b590e47f657a",
+  "version": "3.8.0",
+  "creator": {
+    "version": "3.8.0"
+  }
+}

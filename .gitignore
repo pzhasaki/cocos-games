@@ -1,0 +1,12 @@
+library/
+temp/
+local/
+build/
+profiles/
+node_modules/
+.creator/
+NewProject*/
+extensions/cocos-mcp-server/
+settings/tool-manager.json
+*.log
+.DS_Store

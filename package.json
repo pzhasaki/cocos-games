@@ -1,0 +1,13 @@
+{
+  "name": "light-hero-douyin-cocos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cocos Creator prototype for a child-friendly shake-to-attack monster game targeting TikTok Mini Game.",
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "creator": {
+    "version": "3.8.8"
+  },
+  "uuid": "2024a3c3-b208-4fbc-866e-3382a51c05a0"
+}
