@@ -1,0 +1,30 @@
+{
+  "name": "rollvive",
+  "version": "0.1.0",
+  "description": "Rollvive - 摇骰构筑生存游戏，在异星兽潮中滚出装备、职业与连锁天赋。",
+  "creator": {
+    "version": "3.8.8"
+  },
+  "type": "2d",
+  "scripts": {
+    "build": "echo 'Open in Cocos Creator and use Project > Build'",
+    "lint": "eslint assets/scripts/**/*.ts",
+    "lint:fix": "eslint assets/scripts/**/*.ts --fix",
+    "format": "prettier --write \"assets/scripts/**/*.ts\""
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.0",
+    "typescript": "^4.9.5"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "author": "TheOne Studio",
+  "license": "UNLICENSED",
+  "private": true,
+  "uuid": "571ce1c3-3906-4b75-9319-82b49ad047db"
+}

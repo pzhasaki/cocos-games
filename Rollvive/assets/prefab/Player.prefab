@@ -1,0 +1,251 @@
+[
+  {
+    "__type__": "cc.Prefab",
+    "_name": "Player",
+    "_native": "",
+    "data": {
+      "__id__": 1
+    },
+    "persist": false,
+    "persistent": false
+  },
+  {
+    "__type__": "cc.Node",
+    "_name": "Player",
+    "_children": [
+      {
+        "__id__": 2
+      },
+      {
+        "__id__": 3
+      },
+      {
+        "__id__": 4
+      },
+      {
+        "__id__": 5
+      }
+    ],
+    "_components": [
+      {
+        "__id__": 6
+      }
+    ],
+    "_lpos": {
+      "__type__": "cc.Vec3",
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "_lrot": {
+      "__type__": "cc.Quat",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "w": 1
+    },
+    "_lscale": {
+      "__type__": "cc.Vec3",
+      "x": 1,
+      "y": 1,
+      "z": 1
+    },
+    "_tag": 0,
+    "_layer": 0
+  },
+  {
+    "__type__": "cc.Node",
+    "_name": "Body",
+    "_children": [],
+    "_components": [
+      {
+        "__id__": 7
+      },
+      {
+        "__id__": 8
+      },
+      {
+        "__id__": 9
+      },
+      {
+        "__id__": 10
+      }
+    ],
+    "_lpos": {
+      "__type__": "cc.Vec3",
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "_lrot": {
+      "__type__": "cc.Quat",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "w": 1
+    },
+    "_lscale": {
+      "__type__": "cc.Vec3",
+      "x": 1,
+      "y": 1,
+      "z": 1
+    }
+  },
+  {
+    "__type__": "cc.Node",
+    "_name": "AttackEffect",
+    "_children": [],
+    "_lpos": {
+      "__type__": "cc.Vec3",
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "_lrot": {
+      "__type__": "cc.Quat",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "w": 1
+    },
+    "_lscale": {
+      "__type__": "cc.Vec3",
+      "x": 1,
+      "y": 1,
+      "z": 1
+    },
+    "_active": false
+  },
+  {
+    "__type__": "cc.Node",
+    "_name": "ShieldEffect",
+    "_children": [],
+    "_lpos": {
+      "__type__": "cc.Vec3",
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "_lrot": {
+      "__type__": "cc.Quat",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "w": 1
+    },
+    "_lscale": {
+      "__type__": "cc.Vec3",
+      "x": 1,
+      "y": 1,
+      "z": 1
+    },
+    "_active": false
+  },
+  {
+    "__type__": "cc.Node",
+    "_name": "UltimateEffect",
+    "_children": [],
+    "_lpos": {
+      "__type__": "cc.Vec3",
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "_lrot": {
+      "__type__": "cc.Quat",
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "w": 1
+    },
+    "_lscale": {
+      "__type__": "cc.Vec3",
+      "x": 1,
+      "y": 1,
+      "z": 1
+    },
+    "_active": false
+  },
+  {
+    "__type__": "2b7e4b5f-Player",
+    "_name": "",
+    "node": {
+      "__id__": 1
+    },
+    "attrs": {
+      "__id__": 11
+    },
+    "bodySprite": {
+      "__id__": 7
+    },
+    "anim": {
+      "__id__": 8
+    },
+    "attackEffectNode": {
+      "__id__": 3
+    },
+    "shieldEffectNode": {
+      "__id__": 4
+    },
+    "ultimateEffectNode": {
+      "__id__": 5
+    }
+  },
+  {
+    "__type__": "cc.Sprite",
+    "_name": "",
+    "node": {
+      "__id__": 2
+    },
+    "_spriteFrame": null,
+    "_type": 0,
+    "_sizeMode": 1
+  },
+  {
+    "__type__": "cc.Animation",
+    "_name": "",
+    "node": {
+      "__id__": 2
+    },
+    "_defaultClip": null,
+    "_clips": []
+  },
+  {
+    "__type__": "cc.CircleCollider2D",
+    "_name": "",
+    "node": {
+      "__id__": 2
+    },
+    "tag": 0,
+    "group": 0,
+    "radius": 30,
+    "_offset": {
+      "__type__": "cc.Vec2",
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "__type__": "cc.RigidBody2D",
+    "_name": "",
+    "node": {
+      "__id__": 2
+    },
+    "type": 2,
+    "allowSleep": true,
+    "gravityScale": 0,
+    "_linearDamping": 0,
+    "_angularDamping": 0
+  },
+  {
+    "__type__": "2b7e4b5f-PlayerAttr",
+    "maxHp": 100,
+    "speed": 200,
+    "attackDamage": 15,
+    "ultimateMultiplier": 5,
+    "energyPerAttack": 15,
+    "maxEnergy": 100,
+    "shieldReduction": 0.7,
+    "invincibleTime": 300
+  }
+]
