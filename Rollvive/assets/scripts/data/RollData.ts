@@ -1,12 +1,13 @@
 export type Rarity = 'blue' | 'purple' | 'gold';
-export type ProfessionId = 'blade_adept' | 'hex_gambler' | 'storm_mage';
-export type HexCategory = 'stat' | 'blade' | 'economy' | 'risk';
+export type ProfessionId = 'blade_adept' | 'rift_spearman' | 'hex_gambler' | 'storm_mage';
+export type HexCategory = 'stat' | 'blade' | 'mobility' | 'economy' | 'risk';
 
 export interface CombatBonus {
     maxHp?: number;
     armor?: number;
     dodge?: number;
     luck?: number;
+    moveSpeed?: number;
     damage?: number;
     damagePercent?: number;
     attackRange?: number;
@@ -29,10 +30,9 @@ export interface ProfessionData {
 }
 
 export interface HexFlags {
-    bonusIncome: number;
-    rerollDiscount: number;
     colorBias: number;
     extraChoice: number;
+    freeRefreshBonus: number;
 }
 
 export interface HexCardData {
@@ -52,9 +52,10 @@ export interface HexChoiceView {
 }
 
 export interface HexViewModel {
-    gold: number;
     wave: number;
-    rerollCost: number;
+    freeRefreshesRemaining: number;
+    rewardedAdRefreshAvailable: boolean;
+    rewardedAdRefreshPending: boolean;
     profession: ProfessionData;
     choices: HexChoiceView[];
     picked: HexCardData[];
@@ -63,29 +64,34 @@ export interface HexViewModel {
 export const PROFESSIONS: ProfessionData[] = [
     {
         id: 'blade_adept',
-        name: 'Blade Adept',
-        description: 'Starts with twin blades and scales well with blade-count augments.',
-        bonus: { maxHp: 8, armor: 2, damage: 4, attackRange: 15, bladeCount: 2, fanAngle: 18 },
+        name: 'Knife Duelist',
+        description: 'Starts with short blades and scales well with close melee arcs.',
+        bonus: { maxHp: 8, armor: 1, dodge: 0.04, damage: 4, attackRange: 10, bladeCount: 2, fanAngle: 22 },
+    },
+    {
+        id: 'rift_spearman',
+        name: 'Pirate',
+        description: 'A shotgun bruiser with a close-mid cone blast and heavier rhythm.',
+        bonus: { maxHp: 10, armor: 2, damage: 6, attackRange: 20, bladeCount: 1, fanAngle: 18, attackCooldown: 0.1 },
     },
     {
         id: 'hex_gambler',
-        name: 'Hex Gambler',
-        description: 'Lower health, more gold, better odds for Purple/Gold augments.',
-        bonus: { maxHp: -12, luck: 3, damage: 2, attackRange: 5, bladeCount: 1, energyPerAttack: 8 },
+        name: 'Sharpshooter',
+        description: 'Dual pistols, lower health, one extra free refresh, and better Purple/Gold odds.',
+        bonus: { maxHp: -10, luck: 3, damage: 2, attackRange: 24, bladeCount: 1, energyPerAttack: 8, attackCooldown: -0.02 },
     },
     {
         id: 'storm_mage',
-        name: 'Storm Mage',
-        description: 'Fewer blades, but stronger chain and ultimate scaling.',
-        bonus: { maxHp: -4, dodge: 0.04, damage: 1, attackRange: 35, bladeCount: 1, chainHits: 1, ultimateMultiplier: 1 },
+        name: 'Arcane Mage',
+        description: 'Area magic caster with compact rune bursts and stronger chain scaling.',
+        bonus: { maxHp: -4, dodge: 0.04, damage: 1, attackRange: 40, bladeCount: 1, chainHits: 1, ultimateMultiplier: 1 },
     },
 ];
 
 export const DEFAULT_FLAGS: HexFlags = {
-    bonusIncome: 0,
-    rerollDiscount: 0,
     colorBias: 0,
     extraChoice: 0,
+    freeRefreshBonus: 0,
 };
 
 export const HEX_CARDS: HexCardData[] = [
@@ -192,10 +198,28 @@ export const HEX_CARDS: HexCardData[] = [
         id: 'phase_step',
         name: 'Phase Step',
         rarity: 'purple',
-        category: 'stat',
+        category: 'mobility',
         repeatable: true,
-        description: '+8% dodge and +10 attack range.',
-        bonus: { dodge: 0.08, attackRange: 10 },
+        description: '+8% dodge, +8% move speed, and +10 attack range.',
+        bonus: { dodge: 0.08, moveSpeed: 0.08, attackRange: 10 },
+    },
+    {
+        id: 'swift_stride',
+        name: 'Swift Stride',
+        rarity: 'blue',
+        category: 'mobility',
+        repeatable: true,
+        description: '+10% move speed and +3% dodge.',
+        bonus: { moveSpeed: 0.1, dodge: 0.03 },
+    },
+    {
+        id: 'escape_vector',
+        name: 'Escape Vector',
+        rarity: 'purple',
+        category: 'mobility',
+        repeatable: true,
+        description: '+16% move speed, but attacks slightly slower.',
+        bonus: { moveSpeed: 0.16, attackCooldown: 0.025 },
     },
     {
         id: 'iron_core',
@@ -211,9 +235,9 @@ export const HEX_CARDS: HexCardData[] = [
         name: 'Golden Luck',
         rarity: 'gold',
         category: 'economy',
-        description: '+7 luck and +1 bonus gold after every wave.',
+        description: '+7 luck and one extra free refresh in every draft.',
         bonus: { luck: 7 },
-        flags: { bonusIncome: 1 },
+        flags: { freeRefreshBonus: 1 },
     },
     {
         id: 'star_guardian',
@@ -270,16 +294,16 @@ export const HEX_CARDS: HexCardData[] = [
         name: 'Free Roll',
         rarity: 'blue',
         category: 'economy',
-        description: 'Rerolls cost 1 less.',
-        flags: { rerollDiscount: 1 },
+        description: 'Gain one extra free refresh in every draft.',
+        flags: { freeRefreshBonus: 1 },
     },
     {
         id: 'interest_seed',
         name: 'Interest Seed',
         rarity: 'purple',
         category: 'economy',
-        description: '+2 gold after every wave.',
-        flags: { bonusIncome: 2 },
+        description: 'Drafts show one extra choice after every wave.',
+        flags: { extraChoice: 1 },
     },
     {
         id: 'lucky_hex',

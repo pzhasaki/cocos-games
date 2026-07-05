@@ -134,6 +134,12 @@ Suggested evidence archive:
 - Test notes and screenshots.
 - Final source package hash.
 
+Local archive files:
+
+- `AGENTS.md`: local Codex project rules and documentation requirements.
+- `docs/DevelopmentLog.md`: dated AI-assisted work records.
+- `docs/VisualAssetProductionSpec.md`: final art asset production requirements and prompts.
+
 Prompt archive template:
 
 ```text

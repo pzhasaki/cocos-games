@@ -17,57 +17,65 @@ const RARITY_WEIGHT: Record<Rarity, number> = {
 };
 
 export class RollSystem {
-    private _gold = 0;
     private _wave = 1;
     private _profession: ProfessionData = PROFESSIONS[0];
     private _flags: HexFlags = { ...DEFAULT_FLAGS };
     private readonly _picked: HexCardData[] = [];
     private _choices: HexChoiceView[] = [];
+    private _freeRefreshesRemaining = 1;
+    private _rewardedAdRefreshPending = false;
+    private _rewardedAdRefreshAvailable = true;
 
-    public reset(startingGold: number, professionId: ProfessionId): void {
-        this._gold = startingGold;
+    public reset(_unusedStartingResource: number, professionId: ProfessionId): void {
         this._wave = 1;
         this._profession = PROFESSIONS.find((item) => item.id === professionId) ?? PROFESSIONS[0];
         this._flags = { ...DEFAULT_FLAGS };
         this._picked.length = 0;
         this._choices = [];
+        this._freeRefreshesRemaining = this._getFreeRefreshCount();
+        this._rewardedAdRefreshPending = false;
+        this._rewardedAdRefreshAvailable = true;
 
         if (professionId === 'hex_gambler') {
-            this._gold += 4;
             this._flags.colorBias += 1;
+            this._freeRefreshesRemaining = this._getFreeRefreshCount();
         }
     }
 
-    public get gold(): number {
-        return this._gold;
-    }
-
-    public addGold(amount: number): void {
-        this._gold = Math.max(0, this._gold + amount);
-    }
-
-    public grantWaveRewards(wave: number): number {
+    public grantWaveRewards(wave: number): void {
         this._wave = wave;
-        const base = Math.min(8, 3 + Math.floor(wave / 2));
-        const total = base + this._flags.bonusIncome;
-        this.addGold(total);
-        return total;
     }
 
     public beginDraft(wave: number): void {
         this._wave = wave;
+        this._freeRefreshesRemaining = this._getFreeRefreshCount();
+        this._rewardedAdRefreshPending = false;
         this._choices = this._rollChoices();
     }
 
     public rerollDraft(): string {
-        const cost = this.getRerollCost();
-        if (this._gold < cost) {
-            return `Need ${cost} gold to reroll.`;
+        if (this._freeRefreshesRemaining > 0) {
+            this._freeRefreshesRemaining -= 1;
+            this._choices = this._rollChoices();
+            return 'Refreshed draft.';
         }
 
-        this._gold -= cost;
+        this._rewardedAdRefreshPending = true;
+        return 'Rewarded ad refresh requested.';
+    }
+
+    public completeRewardedRefresh(granted: boolean): string {
+        if (!this._rewardedAdRefreshPending) {
+            return 'No rewarded refresh is pending.';
+        }
+
+        this._rewardedAdRefreshPending = false;
+        if (!granted) {
+            return 'Ad refresh was not granted.';
+        }
+
         this._choices = this._rollChoices();
-        return cost > 0 ? `Rerolled for ${cost} gold.` : 'Free reroll.';
+        return 'Ad refresh granted.';
     }
 
     public selectChoice(index: number): { ok: boolean; message: string; card?: HexCardData } {
@@ -100,21 +108,18 @@ export class RollSystem {
 
     public getViewModel(): HexViewModel {
         return {
-            gold: this._gold,
             wave: this._wave,
-            rerollCost: this.getRerollCost(),
+            freeRefreshesRemaining: this._freeRefreshesRemaining,
+            rewardedAdRefreshAvailable: this._rewardedAdRefreshAvailable,
+            rewardedAdRefreshPending: this._rewardedAdRefreshPending,
             profession: this._profession,
             choices: [...this._choices],
             picked: [...this._picked],
         };
     }
 
-    public getRerollCost(): number {
-        return Math.max(0, 2 - this._flags.rerollDiscount);
-    }
-
     private _rollChoices(): HexChoiceView[] {
-        const count = 3 + this._flags.extraChoice;
+        const count = Math.min(4, 3 + this._flags.extraChoice);
         const results: HexChoiceView[] = [];
         const pickedUnique = new Set(this._picked.filter((card) => !card.repeatable).map((card) => card.id));
         const pool = HEX_CARDS.filter((card) => card.repeatable || !pickedUnique.has(card.id));
@@ -159,11 +164,14 @@ export class RollSystem {
 
     private _sumFlags(source: Partial<HexFlags>): Partial<HexFlags> {
         return {
-            bonusIncome: this._flags.bonusIncome + (source.bonusIncome ?? 0),
-            rerollDiscount: this._flags.rerollDiscount + (source.rerollDiscount ?? 0),
             colorBias: this._flags.colorBias + (source.colorBias ?? 0),
             extraChoice: this._flags.extraChoice + (source.extraChoice ?? 0),
+            freeRefreshBonus: this._flags.freeRefreshBonus + (source.freeRefreshBonus ?? 0),
         };
+    }
+
+    private _getFreeRefreshCount(): number {
+        return 1 + this._flags.freeRefreshBonus + (this._profession.id === 'hex_gambler' ? 1 : 0);
     }
 
     private _addBonus(target: CombatBonus, source: CombatBonus): void {
@@ -171,6 +179,7 @@ export class RollSystem {
         target.armor = (target.armor ?? 0) + (source.armor ?? 0);
         target.dodge = (target.dodge ?? 0) + (source.dodge ?? 0);
         target.luck = (target.luck ?? 0) + (source.luck ?? 0);
+        target.moveSpeed = (target.moveSpeed ?? 0) + (source.moveSpeed ?? 0);
         target.damage = (target.damage ?? 0) + (source.damage ?? 0);
         target.damagePercent = (target.damagePercent ?? 0) + (source.damagePercent ?? 0);
         target.attackRange = (target.attackRange ?? 0) + (source.attackRange ?? 0);

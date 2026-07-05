@@ -8,6 +8,7 @@
   "type": "2d",
   "scripts": {
     "build": "echo 'Open in Cocos Creator and use Project > Build'",
+    "validate:content": "node tools/validate-content.js",
     "lint": "eslint assets/scripts/**/*.ts",
     "lint:fix": "eslint assets/scripts/**/*.ts --fix",
     "format": "prettier --write \"assets/scripts/**/*.ts\""

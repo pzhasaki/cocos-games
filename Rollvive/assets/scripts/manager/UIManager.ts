@@ -43,7 +43,7 @@ export class UIManager extends Component {
     public waveLabel: Label | null = null;
 
     @property({ type: Label })
-    public goldLabel: Label | null = null;
+    public statusLabel: Label | null = null;
 
     @property({ type: Node })
     public pausePanel: Node | null = null;
@@ -182,18 +182,14 @@ export class UIManager extends Component {
         }
     }
 
-    public updateGold(amount: number): void {
-        if (this.goldLabel) {
-            this.goldLabel.string = `Gold ${amount}`;
-        }
-    }
-
     public updateRollHeader(view: HexViewModel): void {
         if (this.rollHeaderLabel) {
-            this.rollHeaderLabel.string = `Wave ${view.wave}  Gold ${view.gold}  ${view.profession.name}`;
+            this.rollHeaderLabel.string = `Wave ${view.wave}  ${view.profession.name}`;
         }
         if (this.rollCostLabel) {
-            this.rollCostLabel.string = `Reroll ${view.rerollCost}G`;
+            this.rollCostLabel.string = view.freeRefreshesRemaining > 0
+                ? `Free refresh x${view.freeRefreshesRemaining}`
+                : 'Refresh by rewarded ad';
         }
     }
 
@@ -245,7 +241,8 @@ export class UIManager extends Component {
         if (this.resultTimeLabel) {
             const min = Math.floor(stats.time / 60);
             const sec = stats.time % 60;
-            this.resultTimeLabel.string = `Time ${min}:${sec.toString().padStart(2, '0')}`;
+            const secText = sec < 10 ? `0${sec}` : `${sec}`;
+            this.resultTimeLabel.string = `Time ${min}:${secText}`;
         }
         if (this.resultKillsLabel) {
             this.resultKillsLabel.string = `Kills ${stats.kills}`;
@@ -361,9 +358,9 @@ export class UIManager extends Component {
         this.energyLabel.node.setPosition(0, 132, 0);
         this.waveLabel = this._createLabel('WaveLabel', battleHUD, 'Wave 0', 14);
         this.waveLabel.node.setPosition(174, 132, 0);
-        this.goldLabel = this._createLabel('GoldLabel', battleHUD, 'Gold 0', 14);
-        this.goldLabel.node.setPosition(174, 106, 0);
-        const marker = this._createLabel('PlayerMarker', battleHUD, '◇', 46);
+        this.statusLabel = this._createLabel('StatusLabel', battleHUD, 'PLAYER', 14);
+        this.statusLabel.node.setPosition(174, 106, 0);
+        const marker = this._createLabel('PlayerMarker', battleHUD, 'PLAYER', 46);
         marker.node.setPosition(0, -8, 0);
         const prompt = this._createLabel('Prompt', battleHUD, 'Game screen loaded. Combat systems are next.', 15);
         prompt.node.setPosition(0, -112, 0);
@@ -372,7 +369,7 @@ export class UIManager extends Component {
         rollPanel.active = false;
         this.rollHeaderLabel = this._createLabel('RollHeader', rollPanel, 'Choose a hex', 18);
         this.rollHeaderLabel.node.setPosition(0, 104, 0);
-        this.rollCostLabel = this._createLabel('RollCost', rollPanel, 'Reroll 1G', 13);
+        this.rollCostLabel = this._createLabel('RollCost', rollPanel, 'Free refresh x1', 13);
         this.rollCostLabel.node.setPosition(0, 74, 0);
         this.rollReadyButton = this._createButton('RollReadyButton', rollPanel, 'TAKE FIRST', 150, 42).getComponent(Button);
         this.rollReadyButton?.node.setPosition(0, -72, 0);

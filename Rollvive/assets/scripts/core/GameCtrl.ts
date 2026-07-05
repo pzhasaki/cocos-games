@@ -31,7 +31,7 @@ export const GameEvent = {
     WAVE_UPDATE: 'wave-update',
     STATE_CHANGED: 'state-changed',
     RESULT_UPDATE: 'result-update',
-    COIN_COLLECTED: 'coin-collected',
+    REWARDED_REFRESH_REQUESTED: 'rewarded-refresh-requested',
 } as const;
 
 @ccclass('GameCtrl')
@@ -61,9 +61,6 @@ export class GameCtrl extends Component {
     public restartOnGameOver: boolean = true;
 
     @property
-    public startingGold: number = 4;
-
-    @property
     public maxWaves: number = 20;
 
     @property({ tooltip: 'blade_adept | hex_gambler | storm_mage' })
@@ -84,7 +81,6 @@ export class GameCtrl extends Component {
         }
 
         GameCtrl._instance = this;
-        this.node.on(GameEvent.COIN_COLLECTED, this._onCoinCollected, this);
     }
 
     protected start(): void {
@@ -98,7 +94,6 @@ export class GameCtrl extends Component {
     }
 
     protected onDestroy(): void {
-        this.node.off(GameEvent.COIN_COLLECTED, this._onCoinCollected, this);
         if (GameCtrl._instance === this) {
             GameCtrl._instance = null;
         }
@@ -142,9 +137,9 @@ export class GameCtrl extends Component {
         if (this._state !== GameState.BATTLE) return;
 
         this.node.emit(GameEvent.WAVE_CLEAR, this._waveCount);
-        const income = this._hexSystem.grantWaveRewards(this._waveCount);
-        this._syncEconomyUI();
-        PlatformDef.showToast(`Wave clear: +${income} gold`);
+        this._hexSystem.grantWaveRewards(this._waveCount);
+        this._syncDraftUI();
+        PlatformDef.showToast('Wave clear');
 
         if (this.maxWaves > 0 && this._waveCount >= this.maxWaves) {
             this._victory = true;
@@ -163,7 +158,10 @@ export class GameCtrl extends Component {
     public rerollHexDraft(): void {
         if (this._state !== GameState.ROLL_PHASE) return;
         const message = this._hexSystem.rerollDraft();
-        this._syncEconomyUI();
+        if (this._hexSystem.getViewModel().rewardedAdRefreshPending) {
+            this.node.emit(GameEvent.REWARDED_REFRESH_REQUESTED);
+        }
+        this._syncDraftUI();
         this.uiManager?.refreshRollUI();
         PlatformDef.showToast(message);
     }
@@ -176,7 +174,7 @@ export class GameCtrl extends Component {
         if (!result.ok) return;
 
         this._syncPlayerBonuses();
-        this._syncEconomyUI();
+        this._syncDraftUI();
         this._waveCount += 1;
         this.changeState(GameState.BATTLE);
     }
@@ -221,10 +219,10 @@ export class GameCtrl extends Component {
         this._waveCount = 1;
         this._runActive = true;
         this._victory = false;
-        this._hexSystem.reset(this.startingGold, this.selectedProfession as ProfessionId);
+        this._hexSystem.reset(0, this.selectedProfession as ProfessionId);
         this._syncPlayerBonuses();
         this.player?.reset();
-        this._syncEconomyUI();
+        this._syncDraftUI();
     }
 
     private _exitState(state: GameState): void {
@@ -290,7 +288,7 @@ export class GameCtrl extends Component {
 
     private _onRollPhaseStart(): void {
         this._hexSystem.beginDraft(this._waveCount);
-        this._syncEconomyUI();
+        this._syncDraftUI();
         this.uiManager?.showBattleUI(false);
         this.uiManager?.showRollPanel(true);
     }
@@ -326,15 +324,9 @@ export class GameCtrl extends Component {
         this.player?.setRunBonuses(this._hexSystem.getTotalCombatBonus());
     }
 
-    private _syncEconomyUI(): void {
+    private _syncDraftUI(): void {
         const view = this._hexSystem.getViewModel();
-        this.uiManager?.updateGold(view.gold);
         this.uiManager?.updateRollHeader(view);
-    }
-
-    private _onCoinCollected(amount: number = 1): void {
-        this._hexSystem.addGold(amount);
-        this._syncEconomyUI();
     }
 
     public static on(event: string, callback: (...args: any[]) => void, target?: unknown): void {

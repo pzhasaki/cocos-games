@@ -28,9 +28,6 @@ export class WaveManager extends Component {
     @property({ type: Prefab })
     public bulletPrefab: Prefab | null = null;
 
-    @property({ type: Prefab })
-    public dropCoinPrefab: Prefab | null = null;
-
     @property({ type: Node })
     public monsterRoot: Node | null = null;
 
@@ -65,7 +62,6 @@ export class WaveManager extends Component {
     private _isWaveActive = false;
     private _monsterPool: Node[] = [];
     private _bulletPool: Node[] = [];
-    private _dropPool: Node[] = [];
 
     protected update(dt: number): void {
         if (!this._isWaveActive) return;
@@ -187,29 +183,6 @@ export class WaveManager extends Component {
         return hitCount;
     }
 
-    public spawnDrop(position: Vec3, amount: number): void {
-        let coin: Node | null = null;
-
-        if (this._dropPool.length > 0) {
-            coin = this._dropPool.pop()!;
-        } else if (this.dropCoinPrefab) {
-            coin = instantiate(this.dropCoinPrefab);
-        }
-
-        if (!coin) {
-            GameCtrl.emit(GameEvent.COIN_COLLECTED, amount);
-            return;
-        }
-
-        coin.position = position;
-        coin.parent = this.dropRoot ?? this.node;
-        coin.active = true;
-
-        this.scheduleOnce(() => {
-            this._flyToPlayer(coin!, amount);
-        }, 0.3);
-    }
-
     public get activeMonsterCount(): number {
         return this._activeMonsters.length;
     }
@@ -283,7 +256,6 @@ export class WaveManager extends Component {
             ai.chargeSpeed = 220 * config.speedMultiplier;
             ai.chargeDamage = 16 + this._currentWave * 2;
             ai.rangedDamage = 10 + this._currentWave;
-            ai.goldDrop = 10 + Math.floor(this._currentWave / 5) * 3;
             this._tintMonster(node, new Color(255, 110, 70));
         } else if (type === MonsterType.ELITE) {
             ai.maxHp = Math.floor(115 * config.hpMultiplier);
@@ -291,7 +263,6 @@ export class WaveManager extends Component {
             ai.chargeSpeed = 250 * config.speedMultiplier;
             ai.chargeDamage = 11 + this._currentWave;
             ai.rangedDamage = 7 + Math.floor(this._currentWave * 0.6);
-            ai.goldDrop = 4;
             this._tintMonster(node, new Color(200, 100, 255));
         } else {
             ai.maxHp = Math.floor(42 * config.hpMultiplier);
@@ -299,7 +270,6 @@ export class WaveManager extends Component {
             ai.chargeSpeed = 330 * config.speedMultiplier;
             ai.chargeDamage = 6 + Math.floor(this._currentWave * 0.45);
             ai.rangedDamage = 5 + Math.floor(this._currentWave * 0.35);
-            ai.goldDrop = 1;
             this._tintMonster(node, new Color(255, 255, 255));
         }
 
@@ -331,30 +301,6 @@ export class WaveManager extends Component {
         if (type === MonsterType.BOSS) return this.bossMonsterPrefab ?? this.eliteMonsterPrefab ?? this.normalMonsterPrefab;
         if (type === MonsterType.ELITE) return this.eliteMonsterPrefab ?? this.normalMonsterPrefab;
         return this.normalMonsterPrefab;
-    }
-
-    private _flyToPlayer(coin: Node, amount: number): void {
-        const player = GameCtrl.instance.player;
-        if (!player) return;
-
-        const target = player.node.position;
-        const dir = new Vec3();
-        Vec3.subtract(dir, target, coin.position);
-
-        if (dir.length() < 50) {
-            coin.active = false;
-            coin.parent = null;
-            this._dropPool.push(coin);
-            GameCtrl.emit(GameEvent.COIN_COLLECTED, amount);
-            return;
-        }
-
-        dir.normalize().multiplyScalar(400 * 0.016);
-        coin.position = coin.position.add(dir);
-
-        this.scheduleOnce(() => {
-            if (coin.active) this._flyToPlayer(coin, amount);
-        }, 0.016);
     }
 
     private _onWaveClear(): void {
