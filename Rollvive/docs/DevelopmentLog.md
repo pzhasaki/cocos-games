@@ -493,3 +493,42 @@ Validation:
 Accepted into project:
 
 - Pending owner play validation.
+
+## 2026-07-20
+
+Tool / model:
+
+- Codex in local workspace.
+
+Operator:
+
+- Project owner requested a professional, detailed planning introduction and asked for it to be written into the project README.
+
+Purpose:
+
+- Add a clear planning entry point at the project root for product positioning, core loop, content systems, art direction, monetization constraints, performance limits, and acceptance criteria.
+
+Human direction:
+
+- Write the detailed Rollvive planning introduction into the project as a planning README.
+
+Work summary:
+
+- Added the root `README.md` as the project planning overview.
+- Consolidated the current landscape-mobile direction, four weapon-bound character roster, wave/Draft loop, five Hex families, no-coin refresh rule, monster roles, Boss cadence, UI, art, audio, monetization, performance, and validation goals.
+- Added links from the README to the existing detailed design and development documents.
+- Clearly identified current `Graphics` runtime art as prototype/fallback rather than final commercial art.
+
+Files changed:
+
+- `README.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Documentation-only change; runtime TypeScript validation not required.
+- Manual consistency check against `AGENTS.md`, `docs/ContentPlan.md`, and the current four-character roster completed.
+
+Accepted into project:
+
+- Pending owner review of the planning README.

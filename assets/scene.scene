@@ -366,7 +366,7 @@
     "_priority": 1073741824,
     "_fov": 45,
     "_fovAxis": 0,
-    "_orthoHeight": 403.28147100424326,
+    "_orthoHeight": 362.3398328690808,
     "_near": 1,
     "_far": 2000,
     "_color": {
@@ -452,7 +452,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "LightHeroGame",
+    "_name": "RuntimeEntry",
     "_objFlags": 0,
     "__editorExtras__": {},
     "_parent": {
