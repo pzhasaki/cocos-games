@@ -532,3 +532,523 @@ Validation:
 Accepted into project:
 
 - Pending owner review of the planning README.
+
+## 2026-07-21
+
+Tool / model:
+
+- Codex in local workspace.
+
+Operator:
+
+- Project owner requested an actionable asset-generation plan based on the game design.
+
+Purpose:
+
+- Audit current prototype assets and define a staged production plan for final characters, enemies, Bosses, environment, UI, VFX, animation, and audio.
+
+Human direction:
+
+- Plan asset generation before starting bulk production.
+
+Work summary:
+
+- Added `docs/AssetProductionPlan.md`.
+- Classified all current 256×256 character and enemy PNGs as prototype/fallback assets.
+- Defined A0 style lock, A1 first-five-wave vertical slice, A2 four-character completion, A3 enemy/Boss expansion, and A4 polish/audio stages.
+- Added concrete deliverable counts, dimensions, naming rules, folder structure, generation workflow, quality gates, runtime checks, and evidence requirements.
+- Selected the first recommended generation batch: Knife Duelist, Void Chaser, Core Tank, Rift Dasher, and Core Brute, with three candidates each.
+- Linked the new plan from the project README.
+
+Files changed:
+
+- `docs/AssetProductionPlan.md`
+- `README.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Documentation-only change; runtime TypeScript validation not required.
+- Existing raster inventory and dimensions were checked locally.
+- Markdown formatting checked with `git diff --check`.
+
+Accepted into project:
+
+- Pending owner review before A0 image generation.
+
+## 2026-07-21 A0 asset briefs
+
+Tool / model:
+
+- Codex in local workspace.
+
+Operator:
+
+- Project owner requested detailed, style-consistent descriptions for every image in the planned first generation batch.
+
+Purpose:
+
+- Turn the 15-image A0 batch into image-by-image production briefs that can be used directly for generation and review.
+
+Human direction:
+
+- Describe every image in detail and keep the style unified.
+
+Work summary:
+
+- Added `docs/A0AssetBriefs.md` with shared world, camera, composition, lighting, material, palette, output, and negative constraints.
+- Added detailed briefs for three Knife Duelist candidates, three Void Chaser candidates, three Core Tank candidates, three Rift Dasher candidates, and three Core Brute Boss candidates.
+- Defined each candidate's design purpose, silhouette, equipment or anatomy, materials, small-screen recognition points, and Boss phase-extension potential.
+- Added a shared generation template and strict candidate selection criteria.
+- Linked the detailed briefs from the production plan and project README.
+
+Files changed:
+
+- `docs/A0AssetBriefs.md`
+- `docs/AssetProductionPlan.md`
+- `README.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Documentation-only change; runtime TypeScript validation not required.
+- Markdown formatting and invalid replacement characters checked locally.
+
+Accepted into project:
+
+- Pending owner approval before image generation.
+
+## 2026-07-21 Knife Duelist A0 generation
+
+Tool / model:
+
+- `imagegen` skill CLI fallback with `gpt-image-2` through the owner-provided OpenAI-compatible endpoint.
+- Local chroma-key removal helper with soft matte, despill, and 1 px edge contraction.
+
+Operator:
+
+- Project owner authorized actual generation of the three Knife Duelist A0 candidates.
+
+Purpose:
+
+- Generate, clean, inspect, and compare the first three character-style candidates before expanding the art batch.
+
+Human direction:
+
+- Start actual image generation with the three Knife Duelist candidates.
+
+Work summary:
+
+- Generated Vanguard, Side Cut, and Blade Wing candidates at 1024×1024.
+- Kept the generated chroma-key source images and produced RGBA transparent versions.
+- Rejected the first Side Cut output because both short blades disappeared at small combat sizes.
+- Performed one targeted edit to create Side Cut V2 with two separately readable short blades.
+- Produced a full contact sheet and a 64/96/128 px readability sheet.
+- Added `docs/A0KnifeDuelistGenerationReview.md` with accepted-candidate notes, rejected-output evidence, limitations, and a recommendation.
+- Stored the complete generation prompt set in `docs/prompts/a0_knife_duelist_batch01.jsonl`.
+- No API key or secret was written to any project file or log.
+
+Files changed or generated:
+
+- `docs/prompts/a0_knife_duelist_batch01.jsonl`
+- `docs/A0KnifeDuelistGenerationReview.md`
+- `output/imagegen/a0_knife_duelist/chroma/*.png`
+- `output/imagegen/a0_knife_duelist/transparent/*.png`
+- `output/imagegen/a0_knife_duelist/knife-duelist-a0-contact-sheet.png`
+- `output/imagegen/a0_knife_duelist/knife-duelist-a0-readability-sheet.png`
+- `docs/AssetProductionPlan.md`
+- `README.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- All final candidate files are 1024×1024 RGBA PNG.
+- Transparent corner pixels and non-empty alpha bounds verified.
+- 64/96/128 px visual comparison completed.
+- Markdown formatting and invalid replacement characters checked locally.
+- Runtime TypeScript validation not required because no gameplay code or imported runtime asset changed.
+
+Accepted into project:
+
+- Three candidate directions are ready for owner review; no candidate has replaced the runtime sprite yet.
+- Current design recommendation: use Blade Wing as the main direction, borrow Vanguard's teal armor balance, and retain Side Cut V2 as an attack-pose reference.
+
+## 2026-07-21 Knife Duelist C runtime integration
+
+Tool / model:
+
+- Codex in local workspace.
+- Pillow LANCZOS downscale for the generated RGBA source asset.
+
+Operator:
+
+- Project owner selected candidate C, Blade Wing, and requested it replace the game runtime material.
+
+Purpose:
+
+- Replace the temporary procedural Knife Duelist presentation with the selected generated bitmap while preserving safe fallback behavior and mobile texture sizing.
+
+Human direction:
+
+- Use candidate C for the runtime replacement.
+
+Work summary:
+
+- Exported the selected 1024×1024 source to a 512×512 RGBA runtime PNG at `assets/resources/characters/knife_duelist.png`.
+- Added Cocos directory and image meta files for the new resources path.
+- Updated `RuntimeEntry` to asynchronously load `characters/knife_duelist/spriteFrame`.
+- Added separate Sprite nodes for the title loadout preview and arena player.
+- Displayed the runtime image in a 76×76 battle frame, giving the trimmed subject an approximately 64 px combat height.
+- Added horizontal facing flip and a restrained melee-action scale pulse.
+- Preserved shield/shadow Graphics overlays and the complete procedural player fallback if loading fails.
+- Kept other professions on their existing procedural art path.
+- Updated the generation review with the owner's selection and the runtime integration state.
+
+Files changed or added:
+
+- `assets/resources.meta`
+- `assets/resources/characters.meta`
+- `assets/resources/characters/knife_duelist.png`
+- `assets/resources/characters/knife_duelist.png.meta`
+- `assets/scripts/RuntimeEntry.ts`
+- `docs/A0KnifeDuelistGenerationReview.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Runtime asset verified as 512×512 RGBA PNG with transparent corners and non-empty alpha bounds.
+- `npm run validate:content`: passed.
+- `npx tsc --noEmit --pretty false --skipLibCheck`: passed.
+- `git diff --check`: passed for the integration files.
+- `npx eslint assets/scripts/RuntimeEntry.ts`: not runnable because the project has no ESLint configuration file.
+- Cocos Creator visual preview remains required to force editor reimport and verify the final 960×540 rendered scale.
+
+Accepted into project:
+
+- Candidate C is selected and connected to the temporary `RuntimeEntry` path.
+- Final visual acceptance is pending Cocos Creator preview on the target 960×540 scene.
+
+## 2026-07-21 Void Chaser A0 generation
+
+Tool / model:
+
+- `imagegen` skill CLI fallback with `gpt-image-2` through the owner-provided OpenAI-compatible endpoint.
+- Local chroma-key removal helper with soft matte, despill, and 1 px edge contraction.
+
+Operator:
+
+- Project owner requested the next asset after the Knife Duelist runtime integration.
+
+Purpose:
+
+- Generate and compare three Void Chaser visual directions for the first-wave basic pursuit enemy.
+
+Human direction:
+
+- Continue to the next planned A0 asset.
+
+Work summary:
+
+- Generated Wedge Head, Split Jaw, and Grappler candidates at 1024×1024.
+- Produced RGBA transparent versions from the chroma-key sources.
+- Rejected the initial Grappler because it looked like a humanoid elite soldier rather than a basic alien chaser.
+- Performed one targeted edit to create Grappler V2 with a low embedded head, compact torso, long arms, large claws, and visible magenta core.
+- Produced a full contact sheet and a 40/64/128 px readability sheet.
+- Added `docs/A0VoidChaserGenerationReview.md` with candidate strengths, limitations, rejected-output evidence, and the current recommendation.
+- Stored the complete prompt set in `docs/prompts/a0_void_chaser_batch01.jsonl`.
+- No API key or secret was written to any project file or log.
+
+Files changed or generated:
+
+- `docs/prompts/a0_void_chaser_batch01.jsonl`
+- `docs/A0VoidChaserGenerationReview.md`
+- `output/imagegen/a0_void_chaser/chroma/*.png`
+- `output/imagegen/a0_void_chaser/transparent/*.png`
+- `output/imagegen/a0_void_chaser/void-chaser-a0-contact-sheet.png`
+- `output/imagegen/a0_void_chaser/void-chaser-a0-readability-sheet.png`
+- `docs/AssetProductionPlan.md`
+- `README.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Final candidate files are 1024×1024 RGBA PNG with transparent corners.
+- 40/64/128 px visual comparison completed.
+- `git diff --check`: passed for text artifacts.
+- Runtime TypeScript validation not required because no enemy runtime asset or gameplay code changed.
+
+Accepted into project:
+
+- Three Void Chaser directions are ready for owner review; no runtime enemy sprite has been replaced.
+- Current recommendation: choose Split Jaw as the main Void Chaser direction and retain Grappler V2 as a possible future special enemy.
+
+## 2026-07-21 Void Chaser C runtime integration
+
+Tool / model:
+
+- Codex in local workspace.
+- Pillow LANCZOS resize and alpha-bound repacking for the generated RGBA source.
+
+Operator:
+
+- Project owner selected candidate C, Grappler V2, for actual runtime use.
+
+Purpose:
+
+- Replace the temporary procedural Void Chaser presentation with the selected generated bitmap while preserving mobile performance and fallback behavior.
+
+Human direction:
+
+- Use candidate C for the actual runtime asset.
+
+Work summary:
+
+- Repacked the transparent source around its alpha bounds and exported a 512×512 runtime PNG at `assets/resources/enemies/void_chaser.png`.
+- Added Cocos resource-directory and image meta files.
+- Added an enemy Sprite layer below the player Sprite and damage-text layer.
+- Updated `RuntimeEntry` to load `enemies/void_chaser/spriteFrame` asynchronously.
+- Added a lazy reusable Sprite-node pool for all living Chaser enemies.
+- Preserved spawn scale, subtle movement pulse, horizontal facing, hit tint, shadow, health bar, and warning behavior.
+- Skipped only the procedural Chaser body when the bitmap resource is available; all other enemy Graphics remain unchanged.
+- Preserved the complete procedural Chaser fallback if resource loading fails.
+- Updated the Void Chaser generation review with the owner's selection and runtime state.
+
+Files changed or added:
+
+- `assets/resources/enemies.meta`
+- `assets/resources/enemies/void_chaser.png`
+- `assets/resources/enemies/void_chaser.png.meta`
+- `assets/scripts/RuntimeEntry.ts`
+- `docs/A0VoidChaserGenerationReview.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Runtime asset verified as 512×512 RGBA PNG with transparent corners and centered alpha bounds.
+- At a 62×62 Sprite frame, the non-transparent subject is approximately 40 px high.
+- `npm run validate:content`: passed.
+- `npx tsc --noEmit --pretty false --skipLibCheck`: passed.
+- `git diff --check`: passed for integration text files.
+- Cocos Creator preview remains required to force asset reimport and inspect multi-enemy overlap in the 960×540 scene.
+
+Accepted into project:
+
+- Candidate C is selected and connected to the temporary `RuntimeEntry` Chaser path.
+- Final visual acceptance is pending Cocos Creator multi-enemy preview.
+
+## 2026-07-21 Core Tank A0 generation
+
+Tool / model:
+
+- `imagegen` skill CLI fallback with `gpt-image-2` through the owner-provided OpenAI-compatible endpoint.
+- Local chroma-key removal helper with soft matte, despill, and 1 px edge contraction.
+
+Operator:
+
+- Project owner requested construction of the next planned A0 asset.
+
+Purpose:
+
+- Generate and compare three Core Tank directions for the slow high-health space-control enemy.
+
+Human direction:
+
+- Continue to the next asset after Void Chaser C runtime integration.
+
+Work summary:
+
+- Generated Beetle Fortress, Hex Tortoise, and Twin Shield candidates at 1024×1024.
+- Produced RGBA transparent versions from the chroma-key sources.
+- Rejected the initial Hex Tortoise because it lacked the central reactor and read as an ordinary armored turtle or obstacle.
+- Performed one targeted edit to create Hex Tortoise V2 with a recessed yellow core, six orange plates, separated support legs, an alien head, and visible biomechanical joints.
+- Recorded a remaining green ground-reflection contamination in B-v2 that must be cleaned if selected.
+- Produced a full contact sheet and a 48/64/128 px readability sheet.
+- Added `docs/A0CoreTankGenerationReview.md` with candidate strengths, limitations, rejected-output evidence, and the current recommendation.
+- Stored the complete prompt set in `docs/prompts/a0_core_tank_batch01.jsonl`.
+- No API key or secret was written to any project file or log.
+
+Files changed or generated:
+
+- `docs/prompts/a0_core_tank_batch01.jsonl`
+- `docs/A0CoreTankGenerationReview.md`
+- `output/imagegen/a0_core_tank/chroma/*.png`
+- `output/imagegen/a0_core_tank/transparent/*.png`
+- `output/imagegen/a0_core_tank/core-tank-a0-contact-sheet.png`
+- `output/imagegen/a0_core_tank/core-tank-a0-readability-sheet.png`
+- `docs/AssetProductionPlan.md`
+- `README.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Final candidate files are 1024×1024 RGBA PNG with transparent corners.
+- 48/64/128 px visual comparison completed.
+- `git diff --check`: passed for text artifacts.
+- Runtime TypeScript validation not required because no Tank runtime asset or gameplay code changed.
+
+Accepted into project:
+
+- Three Core Tank directions are ready for owner review; no runtime Tank sprite has been replaced.
+- Current recommendation: choose Hex Tortoise V2 after cleaning its residual green ground reflection.
+
+## 2026-07-21 Core Tank C runtime integration
+
+Tool / model:
+
+- Codex in local workspace.
+- Pillow LANCZOS resize and alpha-bound repacking for the selected RGBA source.
+
+Operator:
+
+- Project owner selected candidate C, Twin Shield, for actual runtime use.
+
+Purpose:
+
+- Replace the temporary procedural Core Tank presentation with the selected generated bitmap while preserving mobile performance and fallback behavior.
+
+Human direction:
+
+- Use candidate C for the actual runtime asset.
+
+Work summary:
+
+- Repacked the transparent source around its alpha bounds and exported a 512×512 runtime PNG at `assets/resources/enemies/core_tank.png`.
+- Added the Cocos image meta file under the existing enemy resources directory.
+- Updated `RuntimeEntry` to load `enemies/core_tank/spriteFrame` asynchronously.
+- Added a separate lazy reusable Sprite-node pool for living Tank enemies.
+- Displayed the Tank in a 90×90 Sprite frame, producing an approximately 61 px non-transparent subject height versus the Void Chaser's approximately 40 px height.
+- Preserved spawn scale, slow movement pulse, horizontal facing, hit tint, shadow, health bar, and fallback behavior.
+- Skipped only the procedural Tank body when the bitmap resource is available; all other enemy Graphics remain unchanged.
+- Updated the Core Tank generation review with the owner's selection and runtime state.
+
+Files changed or added:
+
+- `assets/resources/enemies/core_tank.png`
+- `assets/resources/enemies/core_tank.png.meta`
+- `assets/scripts/RuntimeEntry.ts`
+- `docs/A0CoreTankGenerationReview.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Runtime asset verified as 512×512 RGBA PNG with transparent corners and centered alpha bounds.
+- At a 90×90 Sprite frame, the non-transparent subject is approximately 61 px high.
+- `npm run validate:content`: passed.
+- `npx tsc --noEmit --pretty false --skipLibCheck`: passed.
+- `git diff --check`: passed for integration text files.
+- Cocos Creator preview remains required to force asset reimport and inspect overlap with Chasers in the 960×540 scene.
+
+Accepted into project:
+
+- Candidate C is selected and connected to the temporary `RuntimeEntry` Tank path.
+- Final visual acceptance is pending Cocos Creator mixed-enemy preview.
+
+## 2026-07-21 Crash Site map generation
+
+Tool / model:
+
+- `imagegen` skill CLI fallback with `gpt-image-2` through the owner-provided OpenAI-compatible endpoint.
+- Pillow LANCZOS export and static gameplay-preview composition.
+
+Operator:
+
+- Project owner requested a map asset outside the next character/monster production step.
+
+Purpose:
+
+- Produce the first 16:9 Hexa-9 Crash Site battlefield with a clear center, restrained edge decoration, and verified readability against current runtime units.
+
+Human direction:
+
+- Generate a map asset.
+
+Work summary:
+
+- Added a detailed map prompt at `docs/prompts/map_crash_site_v01.txt`.
+- Generated a 2048×1152 high-quality source map.
+- Exported the project asset as a 1920×1080 RGB PNG at `assets/resources/environment/crash_site_base.png`.
+- Added Cocos resource-directory and image meta files.
+- Kept the central 70% combat area open and concentrated wreckage, crystals, and energy seams at the perimeter.
+- Created a 960×540 static gameplay preview using the current Knife Duelist, four Void Chasers, and one Core Tank at their planned runtime sizes.
+- Added `docs/CrashSiteMapReview.md` with visual content, file links, readability results, generation evidence, and runtime-integration guidance.
+- No API key or secret was written to any project file or log.
+
+Files changed or generated:
+
+- `docs/prompts/map_crash_site_v01.txt`
+- `output/imagegen/maps/crash-site-map-source-v01.png`
+- `output/imagegen/maps/crash-site-map-gameplay-preview.png`
+- `assets/resources/environment.meta`
+- `assets/resources/environment/crash_site_base.png`
+- `assets/resources/environment/crash_site_base.png.meta`
+- `docs/CrashSiteMapReview.md`
+- `docs/AssetProductionPlan.md`
+- `README.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Generated source verified as 2048×1152 PNG.
+- Project asset verified as 1920×1080 RGB PNG.
+- Static 960×540 unit-readability preview completed.
+- `git diff --check`: passed for text artifacts.
+- Runtime TypeScript validation not required because the map has not been connected to `RuntimeEntry`.
+
+Accepted into project:
+
+- Crash Site v01 is ready as a project resource and visual-review asset.
+- Runtime integration and Cocos texture-compression verification remain pending.
+
+## 2026-07-21 Crash Site runtime integration
+
+Tool / model:
+
+- Codex in local workspace.
+- Pillow center-crop and LANCZOS resize for the runtime-specific arena texture.
+
+Operator:
+
+- Project owner requested that the generated map be put into actual runtime use.
+
+Purpose:
+
+- Display the Crash Site map in the 900×338 temporary runtime Arena without aspect-ratio distortion while preserving Graphics fallback and correct render ordering.
+
+Human direction:
+
+- Use the generated map in the game runtime.
+
+Work summary:
+
+- Cropped the central horizontal band of the 1920×1080 map to the Arena aspect ratio and exported `assets/resources/environment/crash_site_arena.png` at 1800×676.
+- Added the Cocos image meta file for the Arena asset.
+- Added an Arena map Sprite below the Graphics, enemy, player, and damage-number layers.
+- Moved arena Graphics rendering to a dedicated overlay node so it no longer sits below the map Sprite.
+- Updated `RuntimeEntry` to load `environment/crash_site_arena/spriteFrame` asynchronously.
+- Reduced the old grid background to a light darkening overlay and border when the map is available.
+- Preserved the complete old procedural grid when map loading fails.
+- Created a 900×338 static runtime preview with current character and enemy assets.
+- Updated `docs/CrashSiteMapReview.md` with the integration state and remaining Cocos checks.
+
+Files changed or added:
+
+- `assets/resources/environment/crash_site_arena.png`
+- `assets/resources/environment/crash_site_arena.png.meta`
+- `assets/scripts/RuntimeEntry.ts`
+- `output/imagegen/maps/crash-site-arena-runtime-preview.png`
+- `docs/CrashSiteMapReview.md`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- Arena texture verified as 1800×676 RGB PNG, exactly matching the 900×338 runtime aspect ratio.
+- Static 900×338 mixed-unit preview completed.
+- `npm run validate:content`: passed.
+- `npx tsc --noEmit --pretty false --skipLibCheck`: passed.
+- `git diff --check`: passed for integration text files.
+- Cocos Creator visual preview remains required to force asset reimport and verify the final layered render.
+
+Accepted into project:
+
+- Crash Site v01 is connected to the temporary `RuntimeEntry` Arena with a procedural fallback.
+- Final visual and texture-compression acceptance is pending Cocos Creator preview.

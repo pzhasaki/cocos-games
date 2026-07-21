@@ -346,7 +346,12 @@ Hex 卡牌需要清楚展示名称、稀有度、所属家族、核心收益、�
 - [主题与平衡](docs/ThemeAndBalance.md)
 - [美术方向规范](docs/ArtDirectionBible.md)
 - [视觉资产生产规范](docs/VisualAssetProductionSpec.md)
+- [素材生产计划](docs/AssetProductionPlan.md)
+- [A0 素材逐图制作简报](docs/A0AssetBriefs.md)
+- [A0 短刃决斗家生成评审](docs/A0KnifeDuelistGenerationReview.md)
+- [A0 Void Chaser 生成评审](docs/A0VoidChaserGenerationReview.md)
+- [A0 Core Tank 生成评审](docs/A0CoreTankGenerationReview.md)
+- [坠毁区地图生成评审](docs/CrashSiteMapReview.md)
 - [游戏架构](docs/GameArchitecture.md)
 - [场景层级](docs/SceneHierarchy.md)
 - [开发日志](docs/DevelopmentLog.md)
-

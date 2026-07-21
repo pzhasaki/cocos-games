@@ -11,6 +11,9 @@ import {
     KeyCode,
     Label,
     Node,
+    resources,
+    Sprite,
+    SpriteFrame,
     UITransform,
     Vec2,
 } from 'cc';
@@ -338,8 +341,19 @@ export class RuntimeEntry extends Component {
     private _menu: Node | null = null;
     private _game: Node | null = null;
     private _arenaGraphics: Graphics | null = null;
+    private _arenaMapSpriteNode: Node | null = null;
+    private _arenaMapSprite: Sprite | null = null;
+    private _enemySpriteLayer: Node | null = null;
+    private readonly _voidChaserSpriteNodes: Node[] = [];
+    private _voidChaserSpriteFrame: SpriteFrame | null = null;
+    private readonly _coreTankSpriteNodes: Node[] = [];
+    private _coreTankSpriteFrame: SpriteFrame | null = null;
+    private _arenaPlayerSpriteNode: Node | null = null;
+    private _arenaPlayerSprite: Sprite | null = null;
     private _damageTextLayer: Node | null = null;
     private _loadoutPreviewGraphics: Graphics | null = null;
+    private _loadoutPreviewSpriteNode: Node | null = null;
+    private _loadoutPreviewSprite: Sprite | null = null;
     private _joystickBase: Node | null = null;
     private _joystickBaseGraphics: Graphics | null = null;
     private _joystickKnob: Node | null = null;
@@ -472,6 +486,10 @@ export class RuntimeEntry extends Component {
 
         const previewNode = this._panel('LoadoutPreview', this._menu, 278, 266, 292, 0);
         this._loadoutPreviewGraphics = previewNode.addComponent(Graphics);
+        this._loadoutPreviewSpriteNode = this._panel('LoadoutPreviewSprite', previewNode, 212, 212, -8, -14);
+        this._loadoutPreviewSprite = this._loadoutPreviewSpriteNode.addComponent(Sprite);
+        this._loadoutPreviewSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        this._loadoutPreviewSpriteNode.active = false;
 
         this._menuInfoLabel = this._label('MenuInfo', this._menu, '', 15, -212, -40, new Color(210, 224, 248, 255));
         this._startButton = this._button('StartButton', this._menu, this._t('start'), 190, 48, -212, -174);
@@ -484,7 +502,17 @@ export class RuntimeEntry extends Component {
         this._enemyLabel = this._label('Enemy', this._game, '', 14, 0, 219, new Color(255, 154, 154, 255));
 
         const arenaNode = this._panel('ArenaView', this._game, ARENA_WIDTH, ARENA_HEIGHT, 0, 34);
-        this._arenaGraphics = arenaNode.addComponent(Graphics);
+        this._arenaMapSpriteNode = this._panel('ArenaMap', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
+        this._arenaMapSprite = this._arenaMapSpriteNode.addComponent(Sprite);
+        this._arenaMapSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        this._arenaMapSpriteNode.active = false;
+        const arenaGraphicsNode = this._panel('ArenaGraphicsLayer', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
+        this._arenaGraphics = arenaGraphicsNode.addComponent(Graphics);
+        this._enemySpriteLayer = this._panel('EnemySpriteLayer', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
+        this._arenaPlayerSpriteNode = this._panel('PlayerSprite', arenaNode, 76, 76, 0, 0);
+        this._arenaPlayerSprite = this._arenaPlayerSpriteNode.addComponent(Sprite);
+        this._arenaPlayerSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        this._arenaPlayerSpriteNode.active = false;
         this._damageTextLayer = this._panel('DamageTextLayer', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
 
         this._statusLabel = this._label('Status', this._game, '', 13, 0, -166, new Color(255, 220, 130, 255));
@@ -520,6 +548,56 @@ export class RuntimeEntry extends Component {
             this._choiceHandlers.push(handler);
             if (label) this._choiceLabels.push(label);
         }
+
+        this._loadRuntimeAssets();
+    }
+
+    private _loadRuntimeAssets(): void {
+        resources.load('characters/knife_duelist/spriteFrame', SpriteFrame, (error, spriteFrame) => {
+            if (error) {
+                console.warn('[RuntimeEntry] Failed to load Knife Duelist sprite; using Graphics fallback.', error);
+                return;
+            }
+            if (!this.node.isValid) return;
+
+            if (this._arenaPlayerSprite) this._arenaPlayerSprite.spriteFrame = spriteFrame;
+            if (this._loadoutPreviewSprite) this._loadoutPreviewSprite.spriteFrame = spriteFrame;
+            this._drawLoadoutPreview();
+            this._drawArena();
+        });
+
+        resources.load('enemies/void_chaser/spriteFrame', SpriteFrame, (error, spriteFrame) => {
+            if (error) {
+                console.warn('[RuntimeEntry] Failed to load Void Chaser sprite; using Graphics fallback.', error);
+                return;
+            }
+            if (!this.node.isValid) return;
+
+            this._voidChaserSpriteFrame = spriteFrame;
+            this._drawArena();
+        });
+
+        resources.load('enemies/core_tank/spriteFrame', SpriteFrame, (error, spriteFrame) => {
+            if (error) {
+                console.warn('[RuntimeEntry] Failed to load Core Tank sprite; using Graphics fallback.', error);
+                return;
+            }
+            if (!this.node.isValid) return;
+
+            this._coreTankSpriteFrame = spriteFrame;
+            this._drawArena();
+        });
+
+        resources.load('environment/crash_site_arena/spriteFrame', SpriteFrame, (error, spriteFrame) => {
+            if (error) {
+                console.warn('[RuntimeEntry] Failed to load Crash Site map; using Graphics fallback.', error);
+                return;
+            }
+            if (!this.node.isValid) return;
+
+            if (this._arenaMapSprite) this._arenaMapSprite.spriteFrame = spriteFrame;
+            this._drawArena();
+        });
     }
 
     private _enterState(state: GameState): void {
@@ -1853,37 +1931,47 @@ export class RuntimeEntry extends Component {
         const graphics = this._arenaGraphics;
         if (!graphics) return;
 
+        if (this._arenaPlayerSpriteNode) this._arenaPlayerSpriteNode.active = false;
+        this._hideEnemySprites();
+
+        const usesArenaMap = this._syncArenaMapSprite();
         graphics.clear();
-        graphics.fillColor = new Color(22, 28, 42, 255);
-        graphics.roundRect(-ARENA_HALF_WIDTH, -ARENA_HALF_HEIGHT, ARENA_WIDTH, ARENA_HEIGHT, 8);
-        graphics.fill();
-        graphics.fillColor = new Color(16, 22, 34, 255);
-        graphics.roundRect(-ARENA_HALF_WIDTH + 8, -ARENA_HALF_HEIGHT + 8, ARENA_WIDTH - 16, 22, 6);
-        graphics.roundRect(-ARENA_HALF_WIDTH + 8, ARENA_HALF_HEIGHT - 30, ARENA_WIDTH - 16, 22, 6);
-        graphics.fill();
-        graphics.fillColor = new Color(28, 36, 52, 120);
-        for (let i = 0; i < 5; i += 1) {
-            const y = -ARENA_HALF_HEIGHT + 20 + i * 40;
-            graphics.roundRect(-ARENA_HALF_WIDTH + 8, y, ARENA_WIDTH - 16, 1.5, 1);
+        if (usesArenaMap) {
+            graphics.fillColor = new Color(6, 10, 18, 24);
+            graphics.roundRect(-ARENA_HALF_WIDTH, -ARENA_HALF_HEIGHT, ARENA_WIDTH, ARENA_HEIGHT, 8);
             graphics.fill();
-        }
-        graphics.strokeColor = new Color(58, 76, 106, 90);
-        graphics.lineWidth = 1;
-        for (let i = 0; i < 8; i += 1) {
-            const x = -ARENA_HALF_WIDTH + 36 + i * 52;
-            graphics.moveTo(x, -ARENA_HALF_HEIGHT + 10);
-            graphics.lineTo(x, ARENA_HALF_HEIGHT - 10);
-            graphics.stroke();
-        }
-        graphics.strokeColor = new Color(74, 92, 122, 80);
-        graphics.lineWidth = 1;
-        for (let i = 0; i < 10; i += 1) {
-            const x = -ARENA_HALF_WIDTH + 44 + i * 92;
-            graphics.moveTo(x - 24, -ARENA_HALF_HEIGHT + 26);
-            graphics.lineTo(x + 24, -ARENA_HALF_HEIGHT + 26);
-            graphics.moveTo(x + 24, ARENA_HALF_HEIGHT - 26);
-            graphics.lineTo(x - 24, ARENA_HALF_HEIGHT - 26);
-            graphics.stroke();
+        } else {
+            graphics.fillColor = new Color(22, 28, 42, 255);
+            graphics.roundRect(-ARENA_HALF_WIDTH, -ARENA_HALF_HEIGHT, ARENA_WIDTH, ARENA_HEIGHT, 8);
+            graphics.fill();
+            graphics.fillColor = new Color(16, 22, 34, 255);
+            graphics.roundRect(-ARENA_HALF_WIDTH + 8, -ARENA_HALF_HEIGHT + 8, ARENA_WIDTH - 16, 22, 6);
+            graphics.roundRect(-ARENA_HALF_WIDTH + 8, ARENA_HALF_HEIGHT - 30, ARENA_WIDTH - 16, 22, 6);
+            graphics.fill();
+            graphics.fillColor = new Color(28, 36, 52, 120);
+            for (let i = 0; i < 5; i += 1) {
+                const y = -ARENA_HALF_HEIGHT + 20 + i * 40;
+                graphics.roundRect(-ARENA_HALF_WIDTH + 8, y, ARENA_WIDTH - 16, 1.5, 1);
+                graphics.fill();
+            }
+            graphics.strokeColor = new Color(58, 76, 106, 90);
+            graphics.lineWidth = 1;
+            for (let i = 0; i < 8; i += 1) {
+                const x = -ARENA_HALF_WIDTH + 36 + i * 52;
+                graphics.moveTo(x, -ARENA_HALF_HEIGHT + 10);
+                graphics.lineTo(x, ARENA_HALF_HEIGHT - 10);
+                graphics.stroke();
+            }
+            graphics.strokeColor = new Color(74, 92, 122, 80);
+            graphics.lineWidth = 1;
+            for (let i = 0; i < 10; i += 1) {
+                const x = -ARENA_HALF_WIDTH + 44 + i * 92;
+                graphics.moveTo(x - 24, -ARENA_HALF_HEIGHT + 26);
+                graphics.lineTo(x + 24, -ARENA_HALF_HEIGHT + 26);
+                graphics.moveTo(x + 24, ARENA_HALF_HEIGHT - 26);
+                graphics.lineTo(x - 24, ARENA_HALF_HEIGHT - 26);
+                graphics.stroke();
+            }
         }
         graphics.strokeColor = new Color(68, 86, 118, 255);
         graphics.lineWidth = 2;
@@ -1896,6 +1984,9 @@ export class RuntimeEntry extends Component {
         graphics.lineWidth = 1;
         graphics.circle(this._playerX, this._playerY, Math.max(40, this._run.player.attackRange));
         graphics.stroke();
+
+        this._syncVoidChaserSprites();
+        this._syncCoreTankSprites();
 
         for (const trace of this._attackTraces) {
             const progress = 1 - trace.ttl / Math.max(0.001, trace.duration);
@@ -2033,11 +2124,21 @@ export class RuntimeEntry extends Component {
                 graphics.stroke();
             }
 
-            this._drawEnemyModel(graphics, position, archetype.radius, enemy);
+            const usesRuntimeSprite = (position.type === 'chaser' && !!this._voidChaserSpriteFrame)
+                || (position.type === 'tank' && !!this._coreTankSpriteFrame);
+            if (usesRuntimeSprite) {
+                this._drawEnemySpriteBacking(graphics, position, archetype.radius);
+            } else {
+                this._drawEnemyModel(graphics, position, archetype.radius, enemy);
+            }
             this._drawEnemyHpBar(graphics, enemy, position, archetype.radius);
         }
 
-        this._drawPlayerModel(graphics, this._playerX, this._playerY, 1.16, this._shieldTimer > 0);
+        if (this._syncArenaPlayerSprite()) {
+            this._drawPlayerSpriteBacking(graphics, this._playerX, this._playerY, this._shieldTimer > 0);
+        } else {
+            this._drawPlayerModel(graphics, this._playerX, this._playerY, 1.16, this._shieldTimer > 0);
+        }
 
     }
 
@@ -2057,7 +2158,172 @@ export class RuntimeEntry extends Component {
         graphics.roundRect(-139, -133, 278, 266, 8);
         graphics.stroke();
 
-        this._drawPlayerModel(graphics, -8, -22, 3.35, false);
+        if (!this._syncLoadoutPreviewSprite()) {
+            this._drawPlayerModel(graphics, -8, -22, 3.35, false);
+        }
+    }
+
+    private _syncArenaPlayerSprite(): boolean {
+        const node = this._arenaPlayerSpriteNode;
+        const sprite = this._arenaPlayerSprite;
+        const active = this._selectedProfessionId === 'blade_adept'
+            && this._state === GameState.Battle
+            && !!this._run
+            && !!sprite?.spriteFrame;
+
+        if (!node) return false;
+        node.active = active;
+        if (!active) return false;
+
+        const actionProgress = this._weaponActionKind === 'blade'
+            ? 1 - this._weaponActionTimer / Math.max(0.001, this._weaponActionDuration)
+            : 1;
+        const actionPower = this._weaponActionKind === 'blade'
+            ? Math.sin(Math.min(1, Math.max(0, actionProgress)) * Math.PI)
+            : 0;
+        const scale = 1 + actionPower * 0.045;
+        const facingScale = this._facingX < -0.08 ? -scale : scale;
+        node.setPosition(this._playerX, this._playerY, 0);
+        node.setScale(facingScale, scale, 1);
+        return true;
+    }
+
+    private _syncLoadoutPreviewSprite(): boolean {
+        const node = this._loadoutPreviewSpriteNode;
+        const sprite = this._loadoutPreviewSprite;
+        const active = this._selectedProfessionId === 'blade_adept' && !!sprite?.spriteFrame;
+
+        if (!node) return false;
+        node.active = active;
+        if (active) {
+            node.setPosition(-8, -14, 0);
+            node.setScale(1, 1, 1);
+        }
+        return active;
+    }
+
+    private _drawPlayerSpriteBacking(graphics: Graphics, x: number, y: number, shielded: boolean): void {
+        graphics.fillColor = new Color(0, 0, 0, 72);
+        graphics.ellipse(x - 1, y - 22, 25, 8);
+        graphics.fill();
+
+        if (shielded) {
+            graphics.strokeColor = new Color(120, 224, 255, 190);
+            graphics.lineWidth = 3;
+            graphics.circle(x, y, PLAYER_RADIUS + 11);
+            graphics.stroke();
+        }
+    }
+
+    private _syncArenaMapSprite(): boolean {
+        const node = this._arenaMapSpriteNode;
+        const sprite = this._arenaMapSprite;
+        const active = !!sprite?.spriteFrame;
+
+        if (!node) return false;
+        node.active = active;
+        if (active) {
+            node.setPosition(0, 0, 0);
+            node.setScale(1, 1, 1);
+        }
+        return active;
+    }
+
+    private _hideEnemySprites(): void {
+        this._voidChaserSpriteNodes.forEach((node) => {
+            node.active = false;
+        });
+        this._coreTankSpriteNodes.forEach((node) => {
+            node.active = false;
+        });
+    }
+
+    private _syncVoidChaserSprites(): void {
+        if (!this._run || !this._enemySpriteLayer || !this._voidChaserSpriteFrame) return;
+
+        const chasers = this._run.wave.enemies
+            .filter((enemy) => enemy.alive)
+            .map((enemy) => ({ enemy, position: this._enemyPositions.get(enemy.id) }))
+            .filter((entry): entry is { enemy: RunEnemyModel; position: EnemyPosition } => !!entry.position && entry.position.type === 'chaser');
+
+        while (this._voidChaserSpriteNodes.length < chasers.length) {
+            const index = this._voidChaserSpriteNodes.length;
+            const node = this._panel(`VoidChaserSprite${index}`, this._enemySpriteLayer, 62, 62, 0, 0);
+            const sprite = node.addComponent(Sprite);
+            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            sprite.spriteFrame = this._voidChaserSpriteFrame;
+            node.active = false;
+            this._voidChaserSpriteNodes.push(node);
+        }
+
+        const elapsed = this._run.wave.elapsedSeconds;
+        chasers.forEach(({ position }, index) => {
+            const node = this._voidChaserSpriteNodes[index];
+            const sprite = node.getComponent(Sprite);
+            const spawnScale = position.spawnTimer > 0 ? 0.8 + (1 - position.spawnTimer / 0.34) * 0.2 : 1;
+            const pulse = 1 + Math.sin(elapsed * 8 + index * 1.7) * 0.025;
+            const scale = spawnScale * pulse;
+            const facingScale = this._playerX < position.x ? -scale : scale;
+            const alpha = Math.round(255 * Math.max(0.25, spawnScale));
+
+            node.active = true;
+            node.setPosition(position.x, position.y, 0);
+            node.setScale(facingScale, scale, 1);
+            if (sprite) {
+                sprite.spriteFrame = this._voidChaserSpriteFrame;
+                sprite.color = position.hitFlashTimer > 0
+                    ? new Color(255, 176, 190, alpha)
+                    : new Color(255, 255, 255, alpha);
+            }
+        });
+    }
+
+    private _syncCoreTankSprites(): void {
+        if (!this._run || !this._enemySpriteLayer || !this._coreTankSpriteFrame) return;
+
+        const tanks = this._run.wave.enemies
+            .filter((enemy) => enemy.alive)
+            .map((enemy) => ({ enemy, position: this._enemyPositions.get(enemy.id) }))
+            .filter((entry): entry is { enemy: RunEnemyModel; position: EnemyPosition } => !!entry.position && entry.position.type === 'tank');
+
+        while (this._coreTankSpriteNodes.length < tanks.length) {
+            const index = this._coreTankSpriteNodes.length;
+            const node = this._panel(`CoreTankSprite${index}`, this._enemySpriteLayer, 90, 90, 0, 0);
+            const sprite = node.addComponent(Sprite);
+            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            sprite.spriteFrame = this._coreTankSpriteFrame;
+            node.active = false;
+            this._coreTankSpriteNodes.push(node);
+        }
+
+        const elapsed = this._run.wave.elapsedSeconds;
+        tanks.forEach(({ position }, index) => {
+            const node = this._coreTankSpriteNodes[index];
+            const sprite = node.getComponent(Sprite);
+            const spawnScale = position.spawnTimer > 0 ? 0.8 + (1 - position.spawnTimer / 0.34) * 0.2 : 1;
+            const pulse = 1 + Math.sin(elapsed * 3.2 + index * 1.3) * 0.012;
+            const scale = spawnScale * pulse;
+            const facingScale = this._playerX < position.x ? -scale : scale;
+            const alpha = Math.round(255 * Math.max(0.25, spawnScale));
+
+            node.active = true;
+            node.setPosition(position.x, position.y, 0);
+            node.setScale(facingScale, scale, 1);
+            if (sprite) {
+                sprite.spriteFrame = this._coreTankSpriteFrame;
+                sprite.color = position.hitFlashTimer > 0
+                    ? new Color(255, 188, 170, alpha)
+                    : new Color(255, 255, 255, alpha);
+            }
+        });
+    }
+
+    private _drawEnemySpriteBacking(graphics: Graphics, position: EnemyPosition, radius: number): void {
+        const spawnScale = position.spawnTimer > 0 ? 0.8 + (1 - position.spawnTimer / 0.34) * 0.2 : 1;
+        const visualRadius = this._enemyVisualRadius(position.type, radius) * spawnScale;
+        graphics.fillColor = new Color(0, 0, 0, 58);
+        graphics.ellipse(position.x, position.y - visualRadius * 0.95, visualRadius * 1.45, visualRadius * 0.32);
+        graphics.fill();
     }
 
     private _drawPlayerModel(graphics: Graphics, x: number, y: number, scale: number, shielded: boolean): void {
