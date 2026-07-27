@@ -85,6 +85,9 @@ interface VfxPulse {
     maxRadius: number;
     lineWidth: number;
     color: Color;
+    /** Optional bitmap VFX key under resources/vfx/ (hit_spark, crit_burst, ...). */
+    spriteKey?: string;
+    size?: number;
 }
 
 interface ControlZone {
@@ -150,6 +153,7 @@ interface PlayerProjectile {
     pierceRemaining?: number;
     hitIds?: string[];
     blastRadius?: number;
+    isCritical?: boolean;
 }
 
 const SCREEN_WIDTH = 960;
@@ -380,8 +384,27 @@ export class RuntimeEntry extends Component {
     private readonly _weaponIconFrames = new Map<WeaponStyleId, SpriteFrame>();
     /** Misc UI chrome (heart, coin, energy, rarity frames, etc.). */
     private readonly _uiIconFrames = new Map<string, SpriteFrame>();
-    /** VFX keyframes (slash, explosion, heal_ring, ...). */
+    /** VFX keyframes (slash, explosion, heal_ring, hit_spark, ...). */
     private readonly _vfxFrames = new Map<string, SpriteFrame>();
+    /** Pooled floating VFX sprite nodes (bitmap overlays). */
+    private readonly _vfxSpritePool: Array<{ node: Node; sprite: Sprite }> = [];
+    private readonly _activeVfxSprites: Array<{ node: Node; sprite: Sprite; ttl: number; duration: number; baseSize: number }> = [];
+    private readonly _enemyBoltSprites: Array<{ node: Node; sprite: Sprite }> = [];
+    private _vfxSpriteLayer: Node | null = null;
+    /** Draft card background sprites (one per choice slot). */
+    private readonly _choiceCardBgSprites: Sprite[] = [];
+    private readonly _choiceLockSprites: Sprite[] = [];
+    private _rerollIconSprite: Sprite | null = null;
+    private _titleOrnamentSprite: Sprite | null = null;
+    private _waveClearBadgeSprite: Sprite | null = null;
+    private _waveClearBadgeTimer = 0;
+    private _resultBannerSprite: Sprite | null = null;
+    private readonly _professionFrameSprites: Sprite[] = [];
+    private _hpBarFrameSprite: Sprite | null = null;
+    private _hpBarFillSprite: Sprite | null = null;
+    private _energyBarFillSprite: Sprite | null = null;
+    private _statusBarRoot: Node | null = null;
+    private readonly _statusBarWidth = 168;
     /** Pooled sprite nodes per enemy type for multi-unit waves. */
     private readonly _enemySpritePools = new Map<RuntimeEnemyType, Node[]>();
     private readonly _summonSpriteNodes: Node[] = [];
@@ -461,18 +484,21 @@ export class RuntimeEntry extends Component {
     }
 
     protected update(dt: number): void {
-        if (!this._run || this._state !== GameState.Battle) return;
-
         const cappedDt = Math.min(dt, 0.05);
-        this._tickBattle(cappedDt);
-        this._drawArena();
-        this._drawJoystick();
-
-        this._uiTimer += cappedDt;
-        if (this._uiTimer >= 1 / MOBILE_PERFORMANCE_BUDGET.maxUiRefreshHz) {
-            this._uiTimer = 0;
-            this._renderHud();
+        if (this._state === GameState.Battle && this._run) {
+            this._tickBattle(cappedDt);
+            this._drawArena();
+            this._drawJoystick();
+            this._uiTimer += cappedDt;
+            if (this._uiTimer >= 1 / MOBILE_PERFORMANCE_BUDGET.maxUiRefreshHz) {
+                this._uiTimer = 0;
+                this._renderHud();
+            }
+            return;
         }
+        // Outside battle: still animate draft wave-clear badge / lingering VFX.
+        if (this._waveClearBadgeTimer > 0) this._tickWaveClearBadge(cappedDt);
+        if (this._activeVfxSprites.length > 0) this._tickVfx(cappedDt);
     }
 
     protected onDestroy(): void {
@@ -524,6 +550,12 @@ export class RuntimeEntry extends Component {
                 label.fontSize = 12;
                 label.lineHeight = 15;
             }
+            const frameNode = this._panel(`Profession${i}Frame`, button.node, 108, 52, 0, 0);
+            const frameSprite = frameNode.addComponent(Sprite);
+            frameSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            frameNode.setSiblingIndex(0);
+            frameNode.active = false;
+            this._professionFrameSprites.push(frameSprite);
             const slot = i;
             const handler = () => this._pickProfessionSlot(slot);
             button.node.on(Button.EventType.CLICK, handler, this);
@@ -569,6 +601,7 @@ export class RuntimeEntry extends Component {
         const arenaGraphicsNode = this._panel('ArenaGraphicsLayer', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
         this._arenaGraphics = arenaGraphicsNode.addComponent(Graphics);
         this._enemySpriteLayer = this._panel('EnemySpriteLayer', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
+        this._vfxSpriteLayer = this._panel('VfxSpriteLayer', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
         this._arenaPlayerSpriteNode = this._panel('PlayerSprite', arenaNode, 76, 76, 0, 0);
         this._arenaPlayerSprite = this._arenaPlayerSpriteNode.addComponent(Sprite);
         this._arenaPlayerSprite.sizeMode = Sprite.SizeMode.CUSTOM;
@@ -577,6 +610,10 @@ export class RuntimeEntry extends Component {
 
         this._statusLabel = this._label('Status', this._game, '', 13, 0, -166, new Color(255, 220, 130, 255));
         this._logLabel = this._label('Prompt', this._game, '', 12, 0, -190, new Color(190, 205, 230, 255));
+        const resultBannerNode = this._panel('ResultBanner', this._game, 420, 160, 0, 36);
+        this._resultBannerSprite = resultBannerNode.addComponent(Sprite);
+        this._resultBannerSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        resultBannerNode.active = false;
         this._resultLabel = this._label('ResultSummary', this._game, '', 20, 0, 36, new Color(245, 250, 255, 255));
         if (this._resultLabel) this._resultLabel.node.active = false;
 
@@ -598,9 +635,47 @@ export class RuntimeEntry extends Component {
         ultIconNode.active = false;
         this._rerollButton = this._button('RerollButton', this._game, this._t('refresh'), 148, 48, 388, -198);
         this._rerollButton.node.on(Button.EventType.CLICK, this._rerollDraft, this);
+        const rerollIconNode = this._panel('RerollIcon', this._rerollButton.node, 32, 32, -52, 0);
+        this._rerollIconSprite = rerollIconNode.addComponent(Sprite);
+        this._rerollIconSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        rerollIconNode.active = false;
+
+        // Title ornament (behind logo area on title screen).
+        const ornamentNode = this._panel('TitleOrnament', this._title, 220, 220, 0, 40);
+        this._titleOrnamentSprite = ornamentNode.addComponent(Sprite);
+        this._titleOrnamentSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        ornamentNode.active = false;
+        // Wave-clear badge (shown briefly via status; kept as reusable node).
+        const waveClearNode = this._panel('WaveClearBadge', this._game, 96, 96, 0, 40);
+        this._waveClearBadgeSprite = waveClearNode.addComponent(Sprite);
+        this._waveClearBadgeSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        waveClearNode.active = false;
+
+        // Bitmap HP / energy chrome (M6); falls back to Graphics if frames missing.
+        this._statusBarRoot = this._panel('StatusBars', arenaNode, 200, 36, -ARENA_HALF_WIDTH + 104, ARENA_HALF_HEIGHT - 28);
+        this._statusBarRoot.active = false;
+        const hpFrameNode = this._panel('HpBarFrame', this._statusBarRoot, this._statusBarWidth + 8, 14, 0, 6);
+        this._hpBarFrameSprite = hpFrameNode.addComponent(Sprite);
+        this._hpBarFrameSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        hpFrameNode.active = false;
+        const hpFillNode = this._panel('HpBarFill', this._statusBarRoot, this._statusBarWidth, 8, 0, 6);
+        this._hpBarFillSprite = hpFillNode.addComponent(Sprite);
+        this._hpBarFillSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        hpFillNode.active = false;
+        const energyFillNode = this._panel('EnergyBarFill', this._statusBarRoot, this._statusBarWidth, 6, 0, -6);
+        this._energyBarFillSprite = energyFillNode.addComponent(Sprite);
+        this._energyBarFillSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        energyFillNode.active = false;
 
         for (let i = 0; i < 4; i += 1) {
             const button = this._button(`HexChoice${i}`, this._game, 'HEX', 190, 72, -318 + i * 212, -112);
+            // Card plate sits behind the choice content.
+            const cardBgNode = this._panel(`HexChoice${i}CardBg`, button.node, 186, 70, 0, 0);
+            const cardBgSprite = cardBgNode.addComponent(Sprite);
+            cardBgSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            cardBgNode.setSiblingIndex(0);
+            cardBgNode.active = false;
+            this._choiceCardBgSprites.push(cardBgSprite);
             const label = button.node.getChildByName(`HexChoice${i}Label`)?.getComponent(Label);
             if (label) {
                 label.fontSize = 12;
@@ -614,6 +689,12 @@ export class RuntimeEntry extends Component {
             iconSprite.sizeMode = Sprite.SizeMode.CUSTOM;
             iconNode.active = false;
             this._choiceIconSprites.push(iconSprite);
+            // Lock badge (J-type) top-right of card.
+            const lockNode = this._panel(`HexChoice${i}Lock`, button.node, 28, 28, 78, 22);
+            const lockSprite = lockNode.addComponent(Sprite);
+            lockSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            lockNode.active = false;
+            this._choiceLockSprites.push(lockSprite);
             const handler = () => this._pickChoice(i);
             button.node.on(Button.EventType.CLICK, handler, this);
             button.node.active = false;
@@ -786,24 +867,150 @@ export class RuntimeEntry extends Component {
             });
         }
 
-        // UI chrome + VFX keyframes (optional polish; safe if missing).
+        // UI chrome + VFX keyframes (M4 base + M6 polish; safe if missing).
         const uiKeys = [
             'rarity_white', 'rarity_blue', 'rarity_purple', 'rarity_orange',
             'boss_warning', 'joystick_base', 'joystick_knob', 'logo_mark',
             'icon_heart', 'icon_coin', 'icon_energy', 'poster_title_vertical',
+            // M6 UI skins
+            'draft_card_bg', 'draft_lock', 'btn_primary', 'btn_danger',
+            'btn_refresh', 'btn_ad_refresh', 'hp_bar_fill', 'hp_bar_frame',
+            'energy_bar_fill', 'panel_dark', 'result_banner', 'wave_clear',
+            'title_bg_ornament', 'prof_frame',
         ];
         for (const key of uiKeys) {
             resources.load(`ui/${key}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
                 if (error || !spriteFrame || !this.node.isValid) return;
                 this._uiIconFrames.set(key, spriteFrame);
+                this._onUiIconLoaded(key, spriteFrame);
             });
         }
-        const vfxKeys = ['slash', 'explosion', 'heal_ring', 'time_ripple', 'shockwave'];
+        const vfxKeys = [
+            'slash', 'explosion', 'heal_ring', 'time_ripple', 'shockwave',
+            // M6 combat VFX
+            'hit_spark', 'crit_burst', 'dash_trail', 'dash_warning',
+            'control_zone', 'boss_aura', 'boss_phase2', 'level_up',
+            'pickup_glow', 'projectile_enemy',
+        ];
         for (const key of vfxKeys) {
             resources.load(`vfx/${key}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
                 if (error || !spriteFrame || !this.node.isValid) return;
                 this._vfxFrames.set(key, spriteFrame);
             });
+        }
+    }
+
+    private _onUiIconLoaded(key: string, frame: SpriteFrame): void {
+        if (key === 'title_bg_ornament' && this._titleOrnamentSprite) {
+            this._titleOrnamentSprite.spriteFrame = frame;
+            this._titleOrnamentSprite.node.active = this._state === GameState.Title;
+            this._titleOrnamentSprite.node.getComponent(UITransform)?.setContentSize(220, 220);
+        }
+        if (key === 'wave_clear' && this._waveClearBadgeSprite) {
+            this._waveClearBadgeSprite.spriteFrame = frame;
+        }
+        if (key === 'draft_card_bg') {
+            for (const sprite of this._choiceCardBgSprites) {
+                sprite.spriteFrame = frame;
+                sprite.node.getComponent(UITransform)?.setContentSize(186, 70);
+            }
+        }
+        if (key === 'draft_lock') {
+            for (const sprite of this._choiceLockSprites) {
+                sprite.spriteFrame = frame;
+                sprite.node.getComponent(UITransform)?.setContentSize(28, 28);
+            }
+        }
+        if ((key === 'btn_refresh' || key === 'btn_ad_refresh') && this._rerollIconSprite) {
+            this._syncRerollIcon();
+        }
+        if (key === 'joystick_base' && this._joystickBase) {
+            let sprite = this._joystickBase.getComponent(Sprite);
+            if (!sprite) sprite = this._joystickBase.addComponent(Sprite);
+            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            sprite.spriteFrame = frame;
+            this._joystickBase.getComponent(UITransform)?.setContentSize(118, 118);
+            if (this._joystickBaseGraphics) this._joystickBaseGraphics.enabled = false;
+        }
+        if (key === 'joystick_knob' && this._joystickKnob) {
+            let sprite = this._joystickKnob.getComponent(Sprite);
+            if (!sprite) sprite = this._joystickKnob.addComponent(Sprite);
+            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            sprite.spriteFrame = frame;
+            this._joystickKnob.getComponent(UITransform)?.setContentSize(52, 52);
+            if (this._joystickKnobGraphics) this._joystickKnobGraphics.enabled = false;
+        }
+        if (key === 'hp_bar_frame' && this._hpBarFrameSprite) {
+            this._hpBarFrameSprite.spriteFrame = frame;
+            this._hpBarFrameSprite.node.active = true;
+            this._hpBarFrameSprite.node.getComponent(UITransform)?.setContentSize(this._statusBarWidth + 8, 14);
+        }
+        if (key === 'hp_bar_fill' && this._hpBarFillSprite) {
+            this._hpBarFillSprite.spriteFrame = frame;
+            this._hpBarFillSprite.node.active = true;
+            this._hpBarFillSprite.node.getComponent(UITransform)?.setContentSize(this._statusBarWidth, 8);
+        }
+        if (key === 'energy_bar_fill' && this._energyBarFillSprite) {
+            this._energyBarFillSprite.spriteFrame = frame;
+            this._energyBarFillSprite.node.active = true;
+            this._energyBarFillSprite.node.getComponent(UITransform)?.setContentSize(this._statusBarWidth, 6);
+        }
+        if (key === 'btn_primary' && this._startButton) {
+            this._applyButtonSkin(this._startButton, frame, 190, 48);
+        }
+        if (key === 'btn_danger' && this._shieldButton) {
+            this._applyButtonSkin(this._shieldButton, frame, 132, 48);
+        }
+        if (key === 'result_banner' && this._resultBannerSprite) {
+            this._resultBannerSprite.spriteFrame = frame;
+            this._resultBannerSprite.node.getComponent(UITransform)?.setContentSize(420, 160);
+            this._resultBannerSprite.node.active = this._state === GameState.Result;
+        }
+        if (key === 'prof_frame') {
+            for (const sprite of this._professionFrameSprites) {
+                sprite.spriteFrame = frame;
+                sprite.node.getComponent(UITransform)?.setContentSize(108, 52);
+                sprite.node.active = this._state === GameState.Title;
+            }
+        }
+        if (key === 'panel_dark' && this._menu) {
+            // Soft dark plate behind loadout preview when available.
+            const preview = this._menu.getChildByName('LoadoutPreview');
+            if (preview) {
+                let plate = preview.getChildByName('PanelDark');
+                if (!plate) {
+                    plate = this._panel('PanelDark', preview, 278, 266, 0, 0);
+                    plate.setSiblingIndex(0);
+                    const sprite = plate.addComponent(Sprite);
+                    sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+                    sprite.spriteFrame = frame;
+                    plate.getComponent(UITransform)?.setContentSize(278, 266);
+                } else {
+                    const sprite = plate.getComponent(Sprite);
+                    if (sprite) sprite.spriteFrame = frame;
+                }
+            }
+        }
+    }
+
+    private _applyButtonSkin(button: Button, frame: SpriteFrame, width: number, height: number): void {
+        let sprite = button.node.getComponent(Sprite);
+        if (!sprite) sprite = button.node.addComponent(Sprite);
+        sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        sprite.spriteFrame = frame;
+        button.node.getComponent(UITransform)?.setContentSize(width, height);
+    }
+
+    private _syncRerollIcon(): void {
+        if (!this._rerollIconSprite) return;
+        const view = this._rollSystem.getViewModel();
+        const useAd = view.freeRefreshesRemaining <= 0;
+        const key = useAd ? 'btn_ad_refresh' : 'btn_refresh';
+        const frame = this._uiIconFrames.get(key) ?? this._uiIconFrames.get('btn_refresh') ?? null;
+        this._rerollIconSprite.node.active = !!frame && this._state === GameState.RollDraft;
+        if (frame) {
+            this._rerollIconSprite.spriteFrame = frame;
+            this._rerollIconSprite.node.getComponent(UITransform)?.setContentSize(32, 32);
         }
     }
 
@@ -909,8 +1116,22 @@ export class RuntimeEntry extends Component {
         if (this._menu) this._menu.active = state === GameState.Title;
         if (this._game) this._game.active = state !== GameState.Title;
         if (this._resultLabel) this._resultLabel.node.active = state === GameState.Result;
+        if (this._resultBannerSprite) {
+            this._resultBannerSprite.node.active = state === GameState.Result
+                && !!this._resultBannerSprite.spriteFrame;
+        }
+        if (this._titleOrnamentSprite) {
+            this._titleOrnamentSprite.node.active = state === GameState.Title
+                && !!this._titleOrnamentSprite.spriteFrame;
+        }
+        if (this._statusBarRoot) this._statusBarRoot.active = state === GameState.Battle;
+        if (state !== GameState.RollDraft && this._waveClearBadgeSprite && this._waveClearBadgeTimer <= 0) {
+            this._waveClearBadgeSprite.node.active = false;
+        }
         this._setChoiceButtons([]);
         this._setBattleControls(state === GameState.Battle);
+        this._syncRerollIcon();
+        this._syncWeaponPreviewIcon();
         this._refreshLanguageTexts();
         this._refreshLoadoutButtons();
         this._renderHud();
@@ -971,15 +1192,26 @@ export class RuntimeEntry extends Component {
 
     private _refreshLoadoutButtons(): void {
         const pageSize = 8;
+        const profFrame = this._uiIconFrames.get('prof_frame') ?? null;
         for (let i = 0; i < this._professionButtons.length; i += 1) {
             const profession = PROFESSIONS[this._titlePage * pageSize + i];
+            const frameSprite = this._professionFrameSprites[i];
             if (!profession) {
                 this._professionButtons[i].node.active = false;
+                if (frameSprite) frameSprite.node.active = false;
                 continue;
             }
             this._professionButtons[i].node.active = true;
             const selected = profession.id === this._selectedProfessionId;
             this._setButtonText(this._professionButtons[i], this._professionButtonText(profession.id, selected));
+            if (frameSprite) {
+                if (profFrame) frameSprite.spriteFrame = profFrame;
+                frameSprite.node.active = !!profFrame && this._state === GameState.Title;
+                // Slight dim for unselected slots.
+                frameSprite.color = selected
+                    ? new Color(255, 255, 255, 255)
+                    : new Color(200, 210, 230, 180);
+            }
         }
 
         if (this._pageButton) {
@@ -1088,6 +1320,7 @@ export class RuntimeEntry extends Component {
         this._vfxPulses.length = 0;
         this._controlZones.length = 0;
         this._impactShards.length = 0;
+        this._clearActiveVfxSprites();
         this._resetEnemyPositions();
         const plan = getWavePlan(wave);
         this._log(`${plan.title}: ${plan.goal}`);
@@ -1113,6 +1346,7 @@ export class RuntimeEntry extends Component {
         this._tickWaveSpawns(dt);
         this._tickEnemyVisualState(dt);
         this._tickImpactShards(dt);
+        this._tickWaveClearBadge(dt);
         this._weaponActionTimer = Math.max(0, this._weaponActionTimer - dt);
         if (this._weaponActionTimer <= 0) this._weaponActionKind = 'none';
 
@@ -1301,6 +1535,10 @@ export class RuntimeEntry extends Component {
             position.x = this._clampX(position.x + position.dashVx * dt);
             position.y = this._clampY(position.y + position.dashVy * dt);
             position.actionTimer = Math.max(0, position.actionTimer - dt);
+            // Sparse trail while dashing.
+            if (Math.random() < 0.22) {
+                this._spawnVfxSprite('dash_trail', position.x, position.y, 28, 0.18);
+            }
             if (position.actionTimer <= 0) {
                 position.dashCooldown = 1.15;
             }
@@ -1315,6 +1553,7 @@ export class RuntimeEntry extends Component {
                 position.dashVx = (dx / distance) * speed;
                 position.dashVy = (dy / distance) * speed;
                 position.actionTimer = DASH_DURATION_SECONDS;
+                this._spawnVfxSprite('dash_trail', position.x, position.y, 36, 0.28);
             }
             return true;
         }
@@ -1323,6 +1562,17 @@ export class RuntimeEntry extends Component {
         if (position.dashCooldown <= 0 && distance <= DASH_TRIGGER_RANGE) {
             position.windupTimer = DASH_WINDUP_SECONDS;
             position.warningTimer = DASH_WINDUP_SECONDS;
+            this._pulse(
+                position.x,
+                position.y,
+                8,
+                28,
+                DASH_WINDUP_SECONDS,
+                new Color(255, 120, 90, 200),
+                2,
+                'dash_warning',
+                40,
+            );
             return true;
         }
 
@@ -1415,7 +1665,17 @@ export class RuntimeEntry extends Component {
                     : floor === 2
                         ? new Color(255, 140, 90, 210)
                         : new Color(255, 84, 132, 210);
-            this._pulse(position.x, position.y, 16, phaseTwo ? 62 : 48, windup, warnColor, 4);
+            this._pulse(
+                position.x,
+                position.y,
+                16,
+                phaseTwo ? 62 : 48,
+                windup,
+                warnColor,
+                4,
+                phaseTwo ? 'boss_phase2' : 'boss_aura',
+                phaseTwo ? 72 : 58,
+            );
             this._log(this._bossWindupLog(floor, phaseTwo));
         }
 
@@ -1678,6 +1938,7 @@ export class RuntimeEntry extends Component {
 
         const hit = this._computeHitDamage(null);
         const damage = hit.damage;
+        const isCritical = hit.isCritical;
         // Gain ultimate energy per attack
         this._run.player.energy = Math.min(
             MAX_ULTIMATE_ENERGY,
@@ -1685,11 +1946,11 @@ export class RuntimeEntry extends Component {
         );
 
         if (weapon.id === 'blade') {
-            this._resolveBladeSwing(damage, weapon);
+            this._resolveBladeSwing(damage, weapon, isCritical);
             return;
         }
         if (weapon.id === 'spear') {
-            this._resolveSpearThrust(damage, weapon);
+            this._resolveSpearThrust(damage, weapon, isCritical);
             return;
         }
 
@@ -1700,17 +1961,17 @@ export class RuntimeEntry extends Component {
         }
 
         if (weapon.id === 'gun') {
-            this._spawnTwinGunShots(targets[0], Math.max(1, Math.round(damage * 0.74)), weapon);
+            this._spawnTwinGunShots(targets[0], Math.max(1, Math.round(damage * 0.74)), weapon, isCritical);
             this._log(this._fmt('gunShot', { weapon: weapon.shortName }));
             return;
         }
 
-        this._spawnPlayerProjectile(targets[0], Math.max(1, Math.round(damage * 0.9)), weapon);
+        this._spawnPlayerProjectile(targets[0], Math.max(1, Math.round(damage * 0.9)), weapon, 0, 0, isCritical);
         this._triggerWeaponAction('orb', 0.28);
         this._log(this._fmt('orbShot', { weapon: weapon.shortName }));
     }
 
-    private _resolveBladeSwing(damage: number, weapon: WeaponSpec): void {
+    private _resolveBladeSwing(damage: number, weapon: WeaponSpec, isCritical = false): void {
         if (!this._run) return;
 
         const primary = this._getNearestTargetWithin(Math.max(58, this._run.player.attackRange));
@@ -1735,12 +1996,15 @@ export class RuntimeEntry extends Component {
             if (!position) return;
 
             const dealt = this._damageEnemy(enemyIndex, Math.round(damage * (index === 0 ? 1 : 0.58)));
+            if (isCritical && index === 0) {
+                this._float('CRIT', position.x, position.y + 28, new Color(255, 220, 90, 255));
+            }
             this._float(`-${dealt}`, position.x, position.y + 16, weapon.color);
-            this._pulse(position.x, position.y, 5, 18, 0.22, weapon.color, 2);
+            this._pulseHit(position.x, position.y, isCritical && index === 0, weapon.color);
             if (!this._run!.wave.enemies[enemyIndex].alive) {
                 kills += 1;
                 this._float('KO', position.x, position.y, new Color(255, 100, 100, 255));
-                this._pulse(position.x, position.y, 10, 32, 0.34, new Color(255, 104, 104, 230), 3);
+                this._pulseKo(position.x, position.y);
             }
         });
 
@@ -1750,7 +2014,7 @@ export class RuntimeEntry extends Component {
         this._log(this._fmt('bladeSwing', { weapon: weapon.shortName, hits: targets.length + orbitHits, kills }));
     }
 
-    private _resolveSpearThrust(damage: number, weapon: WeaponSpec): void {
+    private _resolveSpearThrust(damage: number, weapon: WeaponSpec, isCritical = false): void {
         if (!this._run) return;
 
         const primary = this._getNearestTargetWithin(Math.max(88, this._run.player.attackRange + 18));
@@ -1777,12 +2041,15 @@ export class RuntimeEntry extends Component {
 
             const falloff = Math.max(0.48, 1 - index * 0.11);
             const dealt = this._damageEnemy(enemyIndex, Math.round(damage * falloff));
+            if (isCritical && index === 0) {
+                this._float('CRIT', position.x, position.y + 28, new Color(255, 220, 90, 255));
+            }
             this._float(`-${dealt}`, position.x, position.y + 16, weapon.color);
-            this._pulse(position.x, position.y, 4, 20 + index * 2, 0.18, weapon.color, 2);
+            this._pulseHit(position.x, position.y, isCritical && index === 0, weapon.color);
             if (!this._run!.wave.enemies[enemyIndex].alive) {
                 kills += 1;
                 this._float('KO', position.x, position.y, new Color(255, 100, 100, 255));
-                this._pulse(position.x, position.y, 10, 32, 0.34, new Color(255, 104, 104, 230), 3);
+                this._pulseKo(position.x, position.y);
             }
         });
 
@@ -1792,7 +2059,7 @@ export class RuntimeEntry extends Component {
         this._log(this._fmt('spearThrust', { weapon: weapon.shortName, hits: targets.length, kills }));
     }
 
-    private _spawnTwinGunShots(target: RunEnemyModel, damage: number, weapon: WeaponSpec): void {
+    private _spawnTwinGunShots(target: RunEnemyModel, damage: number, weapon: WeaponSpec, isCritical = false): void {
         const targetPosition = this._enemyPositions.get(target.id);
         if (!targetPosition) return;
 
@@ -1801,7 +2068,7 @@ export class RuntimeEntry extends Component {
         for (let i = 0; i < pelletCount; i += 1) {
             const side = i % 2 === 0 ? -1 : 1;
             const spread = pelletCount > 2 ? (i - (pelletCount - 1) / 2) * 0.035 : 0;
-            this._spawnPlayerProjectile(target, damage, weapon, side * 9, spread);
+            this._spawnPlayerProjectile(target, damage, weapon, side * 9, spread, isCritical && i === 0);
         }
         this._triggerWeaponAction('gun', 0.16);
     }
@@ -1951,7 +2218,14 @@ export class RuntimeEntry extends Component {
         });
     }
 
-    private _spawnPlayerProjectile(target: RunEnemyModel, damage: number, weapon: WeaponSpec, sideOffset = 0, spreadRadians = 0): void {
+    private _spawnPlayerProjectile(
+        target: RunEnemyModel,
+        damage: number,
+        weapon: WeaponSpec,
+        sideOffset = 0,
+        spreadRadians = 0,
+        isCritical = false,
+    ): void {
         const targetPosition = this._enemyPositions.get(target.id);
         if (!targetPosition) return;
 
@@ -1984,6 +2258,7 @@ export class RuntimeEntry extends Component {
             pierceRemaining: weapon.id === 'orb' ? Math.max(1, 1 + (this._run?.player.chainHits ?? 0)) : 1,
             hitIds: [],
             blastRadius: weapon.id === 'orb' ? 34 + Math.min(18, (this._run?.player.chainHits ?? 0) * 4) : 0,
+            isCritical,
         });
     }
 
@@ -2075,16 +2350,20 @@ export class RuntimeEntry extends Component {
             if (Math.hypot(projectile.x - position.x, projectile.y - position.y) > projectile.radius + archetype.radius) continue;
 
             const dealt = this._damageEnemy(i, projectile.damage);
+            if (projectile.isCritical) {
+                this._float('CRIT', position.x, position.y + 28, new Color(255, 220, 90, 255));
+            }
             this._float(`-${dealt}`, position.x, position.y + 16, projectile.color);
             this._traceAttack(position.x, position.y, projectile.weaponId === 'orb' ? 'chain' : 'blade');
-            this._pulse(position.x, position.y, 5, projectile.weaponId === 'orb' ? 24 : 16, 0.24, projectile.color, 2);
+            this._pulseHit(position.x, position.y, !!projectile.isCritical, projectile.color);
+            projectile.isCritical = false;
             if (projectile.weaponId === 'orb' && (projectile.blastRadius ?? 0) > 0) {
                 this._resolveOrbBlast(projectile, position.x, position.y, i);
             }
 
             if (!this._run.wave.enemies[i].alive) {
                 this._float('KO', position.x, position.y, new Color(255, 100, 100, 255));
-                this._pulse(position.x, position.y, 10, 32, 0.34, new Color(255, 104, 104, 230), 3);
+                this._pulseKo(position.x, position.y);
             }
 
             hitIds.push(enemy.id);
@@ -2120,9 +2399,10 @@ export class RuntimeEntry extends Component {
 
             const dealt = this._damageEnemy(i, Math.max(1, Math.round(projectile.damage * 0.42)));
             this._float(`-${dealt}`, position.x, position.y + 14, projectile.color);
-            this._pulse(position.x, position.y, 5, 18, 0.2, projectile.color, 2);
+            this._pulseHit(position.x, position.y, false, projectile.color);
             if (!this._run.wave.enemies[i].alive) {
                 this._float('KO', position.x, position.y, new Color(255, 100, 100, 255));
+                this._pulseKo(position.x, position.y);
             }
         }
     }
@@ -2326,9 +2606,34 @@ export class RuntimeEntry extends Component {
         this._rollSystem.grantWaveRewards(this._run.wave.wave);
         this._rollSystem.beginDraft(this._run.wave.wave);
         this._log(this._fmt('waveClear', { wave: this._run.wave.wave }));
+        this._showWaveClearBadge();
         this._enterState(GameState.RollDraft);
         this._setChoiceButtons(this._rollSystem.getViewModel().choices);
+        this._syncRerollIcon();
         this._renderHud();
+    }
+
+    private _showWaveClearBadge(): void {
+        if (!this._waveClearBadgeSprite) return;
+        const frame = this._uiIconFrames.get('wave_clear') ?? this._waveClearBadgeSprite.spriteFrame;
+        if (!frame) return;
+        this._waveClearBadgeSprite.spriteFrame = frame;
+        this._waveClearBadgeSprite.node.active = true;
+        this._waveClearBadgeSprite.node.setScale(1.05, 1.05, 1);
+        this._waveClearBadgeSprite.node.getComponent(UITransform)?.setContentSize(110, 110);
+        this._waveClearBadgeTimer = 1.35;
+    }
+
+    private _tickWaveClearBadge(dt: number): void {
+        if (this._waveClearBadgeTimer <= 0) return;
+        this._waveClearBadgeTimer = Math.max(0, this._waveClearBadgeTimer - dt);
+        if (!this._waveClearBadgeSprite) return;
+        const progress = 1 - this._waveClearBadgeTimer / 1.35;
+        const scale = 1.05 + progress * 0.18;
+        this._waveClearBadgeSprite.node.setScale(scale, scale, 1);
+        if (this._waveClearBadgeTimer <= 0) {
+            this._waveClearBadgeSprite.node.active = false;
+        }
     }
 
     private _rerollDraft(): void {
@@ -2613,7 +2918,17 @@ export class RuntimeEntry extends Component {
             if (position) {
                 const arch = ENEMY_ARCHETYPES[position.type] ?? ENEMY_ARCHETYPES.chaser;
                 position.deathTimer = 0.28;
-                this._pulse(position.x, position.y, 10, arch.radius + 28, 0.28, this._enemyColor(position.type), 3);
+                this._pulse(
+                    position.x,
+                    position.y,
+                    10,
+                    arch.radius + 28,
+                    0.28,
+                    this._enemyColor(position.type),
+                    3,
+                    'explosion',
+                    Math.max(36, arch.radius * 3),
+                );
             }
             this._grantKillXp(enemy);
         }
@@ -2655,7 +2970,8 @@ export class RuntimeEntry extends Component {
                 attackCooldown: Math.max(0.18, this._run.player.attackCooldown - levelUps * 0.008),
             };
             this._float(`LV ${level}`, this._playerX, this._playerY + 34, new Color(255, 218, 110, 255));
-            this._pulse(this._playerX, this._playerY, 18, 54, 0.48, new Color(255, 218, 110, 220), 4);
+            this._pulse(this._playerX, this._playerY, 18, 54, 0.48, new Color(255, 218, 110, 220), 4, 'level_up', 72);
+            this._spawnVfxSprite('pickup_glow', this._playerX, this._playerY + 12, 40, 0.4);
             this._log(this._fmt('levelUp', { level }));
         }
 
@@ -2686,9 +3002,10 @@ export class RuntimeEntry extends Component {
             const dealt = this._damageEnemy(i, rawDamage);
             this._float(`-${dealt}`, position.x, position.y + 13, new Color(204, 154, 255, 255));
             this._traceAttack(position.x, position.y, 'chain');
-            this._pulse(position.x, position.y, 7, 22, 0.2, weapon.color, 2);
+            this._pulseHit(position.x, position.y, false, weapon.color);
             if (!this._run.wave.enemies[i].alive) {
                 this._float('KO', position.x, position.y, new Color(255, 100, 100, 255));
+                this._pulseKo(position.x, position.y);
             }
             hits += 1;
         }
@@ -3009,7 +3326,11 @@ export class RuntimeEntry extends Component {
             }
         }
 
+        this._syncEnemyBoltSprites();
         for (const projectile of this._projectiles) {
+            if (projectile.owner === 'enemy' && this._vfxFrames.has('projectile_enemy')) {
+                continue; // drawn via bolt sprite pool
+            }
             graphics.fillColor = projectile.color;
             if (projectile.owner === 'player' && projectile.weaponId === 'gun') {
                 const speed = Math.max(1, Math.hypot(projectile.vx, projectile.vy));
@@ -3780,19 +4101,52 @@ export class RuntimeEntry extends Component {
 
         const hpRatio = Math.max(0, Math.min(1, this._run.player.hp / Math.max(1, this._run.player.maxHp)));
         const xpRatio = Math.max(0, Math.min(1, this._run.stats.xp / Math.max(1, this._run.stats.xpToNext)));
+        const energyRatio = Math.max(0, Math.min(1, this._run.player.energy / MAX_ULTIMATE_ENERGY));
         const x = -ARENA_HALF_WIDTH + 20;
         const y = ARENA_HALF_HEIGHT - 34;
-        const width = 168;
+        const width = this._statusBarWidth;
+        const hasHpSkin = !!(this._hpBarFillSprite?.spriteFrame);
+        const hasEnergySkin = !!(this._energyBarFillSprite?.spriteFrame);
 
+        if (this._statusBarRoot) this._statusBarRoot.active = true;
+        if (hasHpSkin && this._hpBarFillSprite) {
+            this._hpBarFillSprite.node.active = true;
+            this._hpBarFillSprite.node.getComponent(UITransform)?.setContentSize(
+                Math.max(4, width * hpRatio),
+                8,
+            );
+            // Left-align fill under the frame center.
+            this._hpBarFillSprite.node.setPosition(-(width * (1 - hpRatio)) / 2, 6, 0);
+            if (this._hpBarFrameSprite?.spriteFrame) {
+                this._hpBarFrameSprite.node.active = true;
+            }
+        }
+        if (hasEnergySkin && this._energyBarFillSprite) {
+            this._energyBarFillSprite.node.active = true;
+            this._energyBarFillSprite.node.getComponent(UITransform)?.setContentSize(
+                Math.max(3, width * energyRatio),
+                6,
+            );
+            this._energyBarFillSprite.node.setPosition(-(width * (1 - energyRatio)) / 2, -6, 0);
+            this._energyBarFillSprite.color = energyRatio >= 1
+                ? new Color(255, 230, 255, 255)
+                : new Color(210, 190, 255, 255);
+        }
+
+        // Always keep XP as graphics; HP/energy fall back to graphics when skins missing.
         graphics.fillColor = new Color(10, 14, 22, 210);
         graphics.roundRect(x - 8, y - 10, width + 16, 24, 6);
         graphics.fill();
-        graphics.fillColor = new Color(52, 62, 78, 255);
-        graphics.roundRect(x, y, width, 7, 3);
-        graphics.fill();
-        graphics.fillColor = new Color(255, 92, 116, 245);
-        graphics.roundRect(x, y, width * hpRatio, 7, 3);
-        graphics.fill();
+
+        if (!hasHpSkin) {
+            graphics.fillColor = new Color(52, 62, 78, 255);
+            graphics.roundRect(x, y, width, 7, 3);
+            graphics.fill();
+            graphics.fillColor = new Color(255, 92, 116, 245);
+            graphics.roundRect(x, y, width * hpRatio, 7, 3);
+            graphics.fill();
+        }
+
         graphics.fillColor = new Color(52, 62, 78, 210);
         graphics.roundRect(x, y - 8, width, 4, 2);
         graphics.fill();
@@ -3800,16 +4154,16 @@ export class RuntimeEntry extends Component {
         graphics.roundRect(x, y - 8, width * xpRatio, 4, 2);
         graphics.fill();
 
-        // Ultimate energy bar
-        const energyRatio = Math.max(0, Math.min(1, this._run.player.energy / MAX_ULTIMATE_ENERGY));
-        graphics.fillColor = new Color(52, 62, 78, 210);
-        graphics.roundRect(x, y - 14, width, 4, 2);
-        graphics.fill();
-        graphics.fillColor = energyRatio >= 1
-            ? new Color(210, 150, 255, 245)
-            : new Color(140, 110, 220, 230);
-        graphics.roundRect(x, y - 14, width * energyRatio, 4, 2);
-        graphics.fill();
+        if (!hasEnergySkin) {
+            graphics.fillColor = new Color(52, 62, 78, 210);
+            graphics.roundRect(x, y - 14, width, 4, 2);
+            graphics.fill();
+            graphics.fillColor = energyRatio >= 1
+                ? new Color(210, 150, 255, 245)
+                : new Color(140, 110, 220, 230);
+            graphics.roundRect(x, y - 14, width * energyRatio, 4, 2);
+            graphics.fill();
+        }
     }
 
     private _drawEnemyWarning(graphics: Graphics, position: EnemyPosition, radius: number): void {
@@ -4231,15 +4585,26 @@ export class RuntimeEntry extends Component {
     }
 
     private _setChoiceButtons(choices: HexChoiceView[]): void {
+        const cardBgFrame = this._uiIconFrames.get('draft_card_bg') ?? null;
+        const lockFrame = this._uiIconFrames.get('draft_lock') ?? null;
         for (let i = 0; i < this._choiceButtons.length; i += 1) {
             const choice = choices[i];
             const button = this._choiceButtons[i];
             button.node.active = !!choice;
             const icon = this._choiceIconSprites[i];
+            const cardBg = this._choiceCardBgSprites[i];
+            const lockSprite = this._choiceLockSprites[i];
+            if (cardBg) {
+                cardBg.node.active = !!choice && !!cardBgFrame;
+                if (choice && cardBgFrame) cardBg.spriteFrame = cardBgFrame;
+            }
             if (choice && this._choiceLabels[i]) {
                 const name = this._language === 'zh' && choice.data.nameZh ? choice.data.nameZh : choice.data.name;
                 const rarity = choice.data.rarity.toUpperCase();
-                const lock = choice.locked || (this._rollSystem.getLockedSkillIds().indexOf(choice.data.id) >= 0) ? ' 🔒' : '';
+                const isLocked = choice.locked
+                    || (this._rollSystem.getLockedSkillIds().indexOf(choice.data.id) >= 0);
+                // Prefer bitmap lock badge; keep text fallback when frame missing.
+                const lock = isLocked && !lockFrame ? ' 🔒' : '';
                 this._choiceLabels[i].string = `${name}${lock}\n${rarity}`;
                 // Tint by rarity via label color
                 const hex = rarityColorHex(choice.data.rarity);
@@ -4252,10 +4617,16 @@ export class RuntimeEntry extends Component {
                     icon.node.active = !!frame;
                     if (frame) icon.spriteFrame = frame;
                 }
-            } else if (icon) {
-                icon.node.active = false;
+                if (lockSprite) {
+                    lockSprite.node.active = isLocked && !!lockFrame;
+                    if (isLocked && lockFrame) lockSprite.spriteFrame = lockFrame;
+                }
+            } else {
+                if (icon) icon.node.active = false;
+                if (lockSprite) lockSprite.node.active = false;
             }
         }
+        this._syncRerollIcon();
     }
 
     private _setButtonText(button: Button | null, text: string): void {
@@ -4312,6 +4683,95 @@ export class RuntimeEntry extends Component {
             if (this._vfxPulses[i].ttl <= 0) {
                 this._vfxPulses.splice(i, 1);
             }
+        }
+        for (let i = this._activeVfxSprites.length - 1; i >= 0; i -= 1) {
+            const item = this._activeVfxSprites[i];
+            item.ttl -= dt;
+            const progress = 1 - item.ttl / Math.max(0.001, item.duration);
+            const scale = 0.85 + progress * 0.55;
+            const size = item.baseSize * scale;
+            item.node.setScale(scale, scale, 1);
+            item.node.getComponent(UITransform)?.setContentSize(size, size);
+            const alpha = Math.max(0, Math.round(255 * (1 - progress * 0.92)));
+            item.sprite.color = new Color(255, 255, 255, alpha);
+            if (item.ttl <= 0) {
+                item.node.active = false;
+                item.node.setScale(1, 1, 1);
+                this._vfxSpritePool.push({ node: item.node, sprite: item.sprite });
+                this._activeVfxSprites.splice(i, 1);
+            }
+        }
+    }
+
+    private _spawnVfxSprite(key: string, x: number, y: number, size: number, duration: number): void {
+        const frame = this._vfxFrames.get(key);
+        if (!frame || !this._vfxSpriteLayer) return;
+        if (this._activeVfxSprites.length >= MOBILE_PERFORMANCE_BUDGET.maxActiveVfx) {
+            const oldest = this._activeVfxSprites.shift();
+            if (oldest) {
+                oldest.node.active = false;
+                this._vfxSpritePool.push({ node: oldest.node, sprite: oldest.sprite });
+            }
+        }
+        let pooled = this._vfxSpritePool.pop();
+        if (!pooled) {
+            const node = this._panel('VfxSprite', this._vfxSpriteLayer, size, size, x, y);
+            const sprite = node.addComponent(Sprite);
+            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            pooled = { node, sprite };
+        }
+        pooled.sprite.spriteFrame = frame;
+        pooled.sprite.color = new Color(255, 255, 255, 255);
+        pooled.node.setPosition(x, y, 0);
+        pooled.node.setScale(1, 1, 1);
+        pooled.node.getComponent(UITransform)?.setContentSize(size, size);
+        pooled.node.active = true;
+        this._activeVfxSprites.push({
+            node: pooled.node,
+            sprite: pooled.sprite,
+            ttl: duration,
+            duration,
+            baseSize: size,
+        });
+    }
+
+    private _clearActiveVfxSprites(): void {
+        while (this._activeVfxSprites.length > 0) {
+            const item = this._activeVfxSprites.pop();
+            if (!item) break;
+            item.node.active = false;
+            item.node.setScale(1, 1, 1);
+            this._vfxSpritePool.push({ node: item.node, sprite: item.sprite });
+        }
+        for (const bolt of this._enemyBoltSprites) {
+            bolt.node.active = false;
+        }
+    }
+
+    private _syncEnemyBoltSprites(): void {
+        const frame = this._vfxFrames.get('projectile_enemy') ?? null;
+        const enemyBolts = frame
+            ? this._projectiles.filter((p) => p.owner === 'enemy')
+            : [];
+        while (this._enemyBoltSprites.length < enemyBolts.length && this._vfxSpriteLayer) {
+            const node = this._panel('EnemyBolt', this._vfxSpriteLayer, 18, 18, 0, 0);
+            const sprite = node.addComponent(Sprite);
+            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            node.active = false;
+            this._enemyBoltSprites.push({ node, sprite });
+        }
+        for (let i = 0; i < this._enemyBoltSprites.length; i += 1) {
+            const bolt = this._enemyBoltSprites[i];
+            const projectile = enemyBolts[i];
+            if (!projectile || !frame) {
+                bolt.node.active = false;
+                continue;
+            }
+            bolt.sprite.spriteFrame = frame;
+            bolt.sprite.color = new Color(255, 255, 255, 235);
+            bolt.node.setPosition(projectile.x, projectile.y, 0);
+            bolt.node.getComponent(UITransform)?.setContentSize(18, 18);
+            bolt.node.active = true;
         }
     }
 
@@ -4374,7 +4834,7 @@ export class RuntimeEntry extends Component {
             damageCooldown: 0.7,
             color: new Color(168, 122, 255, 150),
         });
-        this._pulse(x, y, radius * 0.45, radius, 0.32, new Color(168, 122, 255, 190), 3);
+        this._pulse(x, y, radius * 0.45, radius, 0.32, new Color(168, 122, 255, 190), 3, 'control_zone', radius * 2.2);
         this._log(`Gravity Binder dropped a slow zone for ${damage} pressure.`);
     }
 
@@ -4459,7 +4919,17 @@ export class RuntimeEntry extends Component {
         this._floatingTextPool.push(label);
     }
 
-    private _pulse(x: number, y: number, radius: number, maxRadius: number, duration: number, color: Color, lineWidth: number): void {
+    private _pulse(
+        x: number,
+        y: number,
+        radius: number,
+        maxRadius: number,
+        duration: number,
+        color: Color,
+        lineWidth: number,
+        spriteKey?: string,
+        spriteSize?: number,
+    ): void {
         if (this._vfxPulses.length >= MOBILE_PERFORMANCE_BUDGET.maxActiveVfx) {
             this._vfxPulses.shift();
         }
@@ -4472,7 +4942,25 @@ export class RuntimeEntry extends Component {
             maxRadius,
             lineWidth,
             color,
+            spriteKey,
+            size: spriteSize,
         });
+        if (spriteKey) {
+            this._spawnVfxSprite(spriteKey, x, y, spriteSize ?? Math.max(28, maxRadius * 1.6), duration);
+        }
+    }
+
+    /** Hit feedback: ring pulse + optional bitmap (crit uses crit_burst). */
+    private _pulseHit(x: number, y: number, isCritical = false, color?: Color): void {
+        if (isCritical) {
+            this._pulse(x, y, 10, 36, 0.34, color ?? new Color(255, 210, 90, 240), 3, 'crit_burst', 56);
+            return;
+        }
+        this._pulse(x, y, 5, 18, 0.22, color ?? new Color(255, 220, 180, 220), 2, 'hit_spark', 32);
+    }
+
+    private _pulseKo(x: number, y: number): void {
+        this._pulse(x, y, 10, 32, 0.34, new Color(255, 104, 104, 230), 3, 'explosion', 48);
     }
 
     private _traceAttack(targetX: number, targetY: number, kind: 'blade' | 'chain'): void {
