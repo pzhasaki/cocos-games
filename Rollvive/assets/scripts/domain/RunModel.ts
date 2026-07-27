@@ -30,6 +30,35 @@ export interface PlayerCombatStats {
     chainHits: number;
     splitBlades: number;
     fanAngle: number;
+    critChance: number;
+    critMultiplier: number;
+    lifesteal: number;
+    executeBonus: number;
+    bossDamageBonus: number;
+    /** E passive: kill stacks, max 15 */
+    killStacks: number;
+    /** F passive: kill counter for heal every 8 */
+    feelKillCounter: number;
+    /** N passive: next hit bonus after dodge */
+    postDodgeBonus: number;
+    /** J passive: locked skill ids for +30% damage */
+    lockedSkillIds: string[];
+    /** Active ultimate remaining seconds */
+    ultimateTimer: number;
+    /** Active ultimate id (profession ultimate) */
+    activeUltimateId: string | null;
+    /** Temporary ATK multiplier from ultimates */
+    ultimateDamageBonus: number;
+    /** Temporary move speed bonus from ultimates */
+    ultimateMoveBonus: number;
+    /** Temporary attack cooldown multiplier (<1 = faster) */
+    ultimateCooldownMul: number;
+    /** Temporary damage taken multiplier */
+    damageTakenMul: number;
+    /** Invulnerable while ultimate (INFP etc.) */
+    invulnerable: boolean;
+    /** Perfect parry / block all damage window */
+    blockAllDamage: boolean;
 }
 
 export interface RunEnemyModel {
@@ -137,6 +166,23 @@ const BASE_PLAYER_STATS: PlayerCombatStats = {
     chainHits: 0,
     splitBlades: 0,
     fanAngle: 0,
+    critChance: 0,
+    critMultiplier: 2,
+    lifesteal: 0,
+    executeBonus: 0,
+    bossDamageBonus: 0,
+    killStacks: 0,
+    feelKillCounter: 0,
+    postDodgeBonus: 0,
+    lockedSkillIds: [],
+    ultimateTimer: 0,
+    activeUltimateId: null,
+    ultimateDamageBonus: 0,
+    ultimateMoveBonus: 0,
+    ultimateCooldownMul: 1,
+    damageTakenMul: 1,
+    invulnerable: false,
+    blockAllDamage: false,
 };
 
 const MIN_PLAYER_MAX_HP = 1;
@@ -145,15 +191,49 @@ const MIN_ATTACK_COOLDOWN = 0.1;
 export function createInitialRun(options: CreateInitialRunOptions = {}): RunModel {
     const profession = options.profession || findProfession(options.professionId) || PROFESSIONS[0];
     const seed = options.seed === undefined ? Date.now() : options.seed;
-    const player = applyCombatBonusToPlayer(BASE_PLAYER_STATS, profession.bonus, true);
+
+    // Map pitch base ATK/HP/SPD (80-120) onto runtime combat units.
+    const baseFromPersonality: PlayerCombatStats = {
+        ...BASE_PLAYER_STATS,
+        maxHp: Math.round(72 + profession.baseHp * 0.45),
+        hp: Math.round(72 + profession.baseHp * 0.45),
+        damage: Math.round(6 + profession.baseAtk * 0.12),
+        moveSpeed: clamp(0.78 + (profession.baseSpd - 80) * 0.004, 0.7, 1.35),
+        attackRange: 110,
+        attackCooldown: 0.72,
+        energy: 0,
+        energyPerAttack: 12,
+        critMultiplier: 2,
+    };
+
+    const withBonus = applyCombatBonusToPlayer(baseFromPersonality, profession.bonus, true);
+    const flags = { ...DEFAULT_FLAGS };
+    // P-type: +1 free refresh permanently via profession draft rules (also handled in RollSystem).
+    if (profession.traits.indexOf('P') >= 0) {
+        flags.extraChoice = Math.max(flags.extraChoice, 1);
+        flags.freeRefreshBonus += 1;
+    }
+    // J-type: can lock 1 skill for +30% damage.
+    if (profession.traits.indexOf('J') >= 0) {
+        flags.lockedSkillSlots = Math.max(flags.lockedSkillSlots, 1);
+    }
+    // N-type base dodge from dimension passive.
+    if (profession.traits.indexOf('N') >= 0) {
+        withBonus.dodge = clamp(withBonus.dodge + 0.15, 0, 0.85);
+    }
+    // S-type base crit from dimension passive.
+    if (profession.traits.indexOf('S') >= 0) {
+        withBonus.critChance = clamp(withBonus.critChance + 0.25, 0, 0.95);
+        withBonus.critMultiplier = Math.max(withBonus.critMultiplier, 2);
+    }
 
     return {
         seed,
         profession,
-        player,
-        flags: { ...DEFAULT_FLAGS },
+        player: withBonus,
+        flags,
         wave: createWaveRuntime(options.startingWave || 1, options.enemies || []),
-        draftRefresh: createDraftRefresh({ ...DEFAULT_FLAGS }),
+        draftRefresh: createDraftRefresh(flags),
         pickedCards: [],
         draftChoices: [],
         selectedDraftChoiceId: null,
@@ -344,8 +424,12 @@ export function cloneRun(run: RunModel): RunModel {
         profession: {
             ...run.profession,
             bonus: { ...run.profession.bonus },
+            traits: [...run.profession.traits] as typeof run.profession.traits,
         },
-        player: { ...run.player },
+        player: {
+            ...run.player,
+            lockedSkillIds: [...(run.player.lockedSkillIds || [])],
+        },
         flags: { ...run.flags },
         draftRefresh: { ...run.draftRefresh },
         wave: {
@@ -402,6 +486,7 @@ function applyCombatBonusToPlayer(
         : clamp(Math.min(stats.hp, nextMaxHp) + Math.max(0, maxHpDelta), 0, nextMaxHp);
 
     return {
+        ...stats,
         maxHp: nextMaxHp,
         hp: nextHp,
         armor: Math.max(0, stats.armor + (bonus.armor || 0)),
@@ -421,6 +506,12 @@ function applyCombatBonusToPlayer(
         chainHits: Math.max(0, Math.floor(stats.chainHits + (bonus.chainHits || 0))),
         splitBlades: Math.max(0, Math.floor(stats.splitBlades + (bonus.splitBlades || 0))),
         fanAngle: Math.max(0, stats.fanAngle + (bonus.fanAngle || 0)),
+        critChance: clamp(stats.critChance + (bonus.critChance || 0), 0, 0.95),
+        critMultiplier: Math.max(1.5, stats.critMultiplier + (bonus.critMultiplier || 0)),
+        lifesteal: clamp(stats.lifesteal + (bonus.lifesteal || 0), 0, 0.5),
+        executeBonus: Math.max(0, stats.executeBonus + (bonus.executeBonus || 0)),
+        bossDamageBonus: Math.max(0, stats.bossDamageBonus + (bonus.bossDamageBonus || 0)),
+        lockedSkillIds: [...(stats.lockedSkillIds || [])],
     };
 }
 
@@ -433,6 +524,7 @@ function applyHexFlags(flags: HexFlags, patch: Partial<HexFlags> | undefined): H
         colorBias: flags.colorBias + (patch.colorBias || 0),
         extraChoice: flags.extraChoice + (patch.extraChoice || 0),
         freeRefreshBonus: flags.freeRefreshBonus + (patch.freeRefreshBonus || 0),
+        lockedSkillSlots: flags.lockedSkillSlots + (patch.lockedSkillSlots || 0),
     };
 }
 

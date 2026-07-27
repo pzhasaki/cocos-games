@@ -63,8 +63,8 @@ export class GameCtrl extends Component {
     @property
     public maxWaves: number = 20;
 
-    @property({ tooltip: 'blade_adept | hex_gambler | storm_mage' })
-    public selectedProfession: string = 'blade_adept';
+    @property({ tooltip: 'intj | esfp | ... 16 MBTI ids' })
+    public selectedProfession: string = 'intj';
 
     private _state: GameState = GameState.IDLE;
     private _elapsed = 0;

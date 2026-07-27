@@ -20,12 +20,19 @@ import {
 import { GameState } from './domain/GameState';
 import { createEnemy, createInitialRun, createWaveRuntime, RunEnemyModel, RunModel } from './domain/RunModel';
 import { MOBILE_PERFORMANCE_BUDGET } from './domain/PerformanceBudget';
-import { ENEMY_ARCHETYPES, getWavePlan, RuntimeEnemyType } from './domain/BattleContent';
+import { ENEMY_ARCHETYPES, getFloorTheme, getWavePlan, RuntimeEnemyType } from './domain/BattleContent';
 import { ATTACK_TRAIL_FEEDBACK, DAMAGE_NUMBER_FEEDBACK } from './domain/FeedbackSpec';
-import { calculatePlayerDamage, createRuntimeWaveEnemies, damageAfterArmor, enemyTypeFromConfig } from './domain/RuntimeBattleMath';
+import {
+    calculatePlayerDamage,
+    countNearbyEnemies,
+    createRuntimeWaveEnemies,
+    damageAfterArmor,
+    enemyTypeFromConfig,
+    resolvePlayerHitDamage,
+} from './domain/RuntimeBattleMath';
 import { RollSystem } from './manager/RollSystem';
-import { PROFESSIONS } from './data/RollData';
-import type { CombatBonus, HexCardData, HexChoiceView, ProfessionId } from './data/RollData';
+import { DIMENSION_PASSIVES, HEX_CARDS, PROFESSIONS, professionHasTrait, rarityColorHex } from './data/RollData';
+import type { CombatBonus, HexCardData, HexChoiceView, MbtiTrait, ProfessionId, UltimateId, WeaponStyleId } from './data/RollData';
 
 const { ccclass } = _decorator;
 
@@ -101,7 +108,7 @@ interface ImpactShard {
     color: Color;
 }
 
-type WeaponId = 'blade' | 'spear' | 'gun' | 'orb';
+type WeaponId = WeaponStyleId;
 type WeaponActionKind = WeaponId | 'none';
 
 interface WeaponSpec {
@@ -124,6 +131,10 @@ interface LoadoutSpec {
     trimColor: Color;
     silhouette: 'duelist' | 'pirate' | 'sharpshooter' | 'mage';
 }
+
+/** Introvert alone radius in arena px (~3m feel). */
+const INTROVERT_RADIUS = 96;
+const MAX_ULTIMATE_ENERGY = 100;
 
 interface PlayerProjectile {
     x: number;
@@ -161,86 +172,92 @@ type RuntimeLanguage = 'en' | 'zh';
 
 const UI_TEXT: Record<RuntimeLanguage, Record<string, string>> = {
     en: {
-        subtitle: 'Bound survivor loadouts for landscape mobile combat.',
+        subtitle: '16 Personalities · Mind Dungeon — play your type.',
         language: 'LANGUAGE',
-        loadouts: 'SURVIVOR LOADOUTS',
-        start: 'START RUN',
-        shield: 'SHIELD',
+        loadouts: 'MBTI PERSONALITIES',
+        start: 'ENTER ABYSS',
+        shield: 'ULTIMATE',
         restart: 'RESTART',
         refresh: 'REFRESH',
         watchAd: 'WATCH AD',
-        draft: 'HEX DRAFT',
-        arenaClear: 'Arena clear',
+        draft: 'SKILL DRAFT',
+        arenaClear: 'Mind clear',
         runComplete: 'RUN COMPLETE',
         wave: 'Wave',
         level: 'Lv',
         hp: 'HP',
-        enemies: 'Enemies',
+        enemies: 'Foes',
         freeRefresh: 'Free refresh',
-        pickUpgrade: 'Pick one upgrade',
+        pickUpgrade: 'Pick one skill',
         auto: 'AUTO',
         firing: 'FIRING',
-        seeking: 'SEEK RANGE',
+        seeking: 'SEEK',
         snared: 'SNARED',
         mobile: 'MOBILE',
-        shieldReady: 'ready',
+        shieldReady: 'READY',
         phase1: 'PHASE 1',
         phase2: 'PHASE 2',
-        shieldUp: 'Shield up for {seconds}s.',
-        meleeSeek: '{weapon} looking for melee range.',
+        shieldUp: 'Ultimate active {seconds}s.',
+        meleeSeek: '{weapon} seeking melee range.',
         rangedSeek: '{weapon} seeking target.',
         bladeSwing: '{weapon} swept {hits}, KO {kills}.',
         spearThrust: '{weapon} blasted {hits}, KO {kills}.',
-        gunShot: '{weapon} fired twin shots.',
-        orbShot: '{weapon} launched an area core.',
-        projectileHit: 'Projectile hit for {damage}.',
-        shieldProjectile: 'Shield cut projectile damage to {damage}.',
-        contactHit: 'Enemies reached you. Took {damage}.',
-        shieldContact: 'Shield absorbed pressure. Took {damage}.',
-        waveClear: 'Wave {wave} clear. Pick a hex or use the free refresh.',
+        gunShot: '{weapon} fired shots.',
+        orbShot: '{weapon} launched a core.',
+        projectileHit: 'Hit for {damage}.',
+        shieldProjectile: 'Blocked — took {damage}.',
+        contactHit: 'Contact damage {damage}.',
+        shieldContact: 'Blocked contact — took {damage}.',
+        waveClear: 'Wave {wave} clear. Pick a skill or refresh.',
         picked: 'Picked {card}.',
-        levelUp: 'Level {level}: base HP, damage, speed and attack rate improved.',
+        levelUp: 'Level {level}: base stats improved.',
+        ultimateReady: 'Ultimate READY — tap ULTIMATE.',
+        ultimateUsed: 'Ultimate: {name}',
+        energyLow: 'Ultimate energy {energy}/100.',
     },
     zh: {
-        subtitle: '角色与武器绑定，横屏移动端生存战斗。',
+        subtitle: '16型人格 · 意识深渊 — 成为你的人格。',
         language: '语言',
-        loadouts: '角色配置',
-        start: '开始',
-        shield: '护盾',
+        loadouts: 'MBTI 人格',
+        start: '进入深渊',
+        shield: '大招',
         restart: '再来',
         refresh: '刷新',
         watchAd: '看广告',
-        draft: '强化选择',
-        arenaClear: '战场清空',
+        draft: '技能选择',
+        arenaClear: '心魔清空',
         runComplete: '本局结束',
         wave: '波次',
         level: '等级',
         hp: '生命',
-        enemies: '敌人',
+        enemies: '心魔',
         freeRefresh: '免费刷新',
-        pickUpgrade: '选择一项强化',
+        pickUpgrade: '选择一项技能',
         auto: '自动',
         firing: '攻击中',
-        seeking: '寻找目标',
+        seeking: '寻敌',
         snared: '被束缚',
         mobile: '可移动',
         shieldReady: '就绪',
         phase1: '一阶段',
         phase2: '二阶段',
-        shieldUp: '护盾开启 {seconds} 秒。',
-        meleeSeek: '{weapon} 正在寻找近战距离。',
-        rangedSeek: '{weapon} 正在寻找目标。',
-        bladeSwing: '{weapon} 横扫 {hits} 个目标，击败 {kills} 个。',
-        spearThrust: '{weapon} 霰弹轰击 {hits} 个目标，击败 {kills} 个。',
-        gunShot: '{weapon} 双枪齐射。',
-        orbShot: '{weapon} 发射范围核心。',
-        projectileHit: '投射物命中，受到 {damage} 点伤害。',
-        shieldProjectile: '护盾削减投射物伤害至 {damage}。',
-        contactHit: '敌人贴身，受到 {damage} 点伤害。',
-        shieldContact: '护盾吸收压力，受到 {damage} 点伤害。',
-        waveClear: '第 {wave} 波完成。选择一个强化，或使用免费刷新。',
+        shieldUp: '大招生效 {seconds} 秒。',
+        meleeSeek: '{weapon} 寻找近战距离。',
+        rangedSeek: '{weapon} 寻找目标。',
+        bladeSwing: '{weapon} 横扫 {hits}，击败 {kills}。',
+        spearThrust: '{weapon} 轰击 {hits}，击败 {kills}。',
+        gunShot: '{weapon} 射击。',
+        orbShot: '{weapon} 发射核心。',
+        projectileHit: '受到 {damage} 点伤害。',
+        shieldProjectile: '格挡后受到 {damage}。',
+        contactHit: '贴身伤害 {damage}。',
+        shieldContact: '格挡贴身，受到 {damage}。',
+        waveClear: '第 {wave} 波完成。选择技能或刷新。',
         picked: '选择了 {card}。',
-        levelUp: '等级 {level}：基础生命、伤害、速度和攻速提升。',
+        levelUp: '等级 {level}：基础属性提升。',
+        ultimateReady: '大招就绪 — 点击大招。',
+        ultimateUsed: '大招：{name}',
+        energyLow: '大招能量 {energy}/100。',
     },
 };
 
@@ -293,47 +310,40 @@ const WEAPON_SPECS: Record<WeaponId, WeaponSpec> = {
 
 const WEAPON_ORDER: WeaponId[] = ['blade', 'spear', 'gun', 'orb'];
 
-const PROFESSION_BUTTON_LABELS: Record<ProfessionId, string> = {
-    blade_adept: 'DUELIST',
-    rift_spearman: 'PIRATE',
-    hex_gambler: 'SHOOTER',
-    storm_mage: 'MAGE',
+const GROUP_COLORS: Record<string, { body: Color; trim: Color }> = {
+    NT: { body: new Color(56, 92, 168, 255), trim: new Color(120, 190, 255, 255) },
+    NF: { body: new Color(112, 72, 168, 255), trim: new Color(210, 150, 255, 255) },
+    SJ: { body: new Color(48, 110, 98, 255), trim: new Color(120, 220, 180, 255) },
+    SP: { body: new Color(150, 78, 52, 255), trim: new Color(255, 180, 90, 255) },
 };
 
-const PROFESSION_LOADOUTS: Record<ProfessionId, LoadoutSpec> = {
-    blade_adept: {
-        professionId: 'blade_adept',
-        weaponId: 'blade',
-        roleTag: 'Short-blade melee',
-        bodyColor: new Color(42, 150, 142, 255),
-        trimColor: new Color(255, 218, 116, 255),
-        silhouette: 'duelist',
-    },
-    rift_spearman: {
-        professionId: 'rift_spearman',
-        weaponId: 'spear',
-        roleTag: 'Shotgun cone',
-        bodyColor: new Color(36, 78, 122, 255),
-        trimColor: new Color(228, 174, 82, 255),
-        silhouette: 'pirate',
-    },
-    hex_gambler: {
-        professionId: 'hex_gambler',
-        weaponId: 'gun',
-        roleTag: 'Twin-pistol ranged',
-        bodyColor: new Color(76, 88, 112, 255),
-        trimColor: new Color(142, 220, 255, 255),
-        silhouette: 'sharpshooter',
-    },
-    storm_mage: {
-        professionId: 'storm_mage',
-        weaponId: 'orb',
-        roleTag: 'Area caster',
-        bodyColor: new Color(142, 112, 238, 255),
-        trimColor: new Color(204, 154, 255, 255),
-        silhouette: 'mage',
-    },
+const STYLE_SILHOUETTE: Record<WeaponId, LoadoutSpec['silhouette']> = {
+    blade: 'duelist',
+    spear: 'pirate',
+    gun: 'sharpshooter',
+    orb: 'mage',
 };
+
+function buildProfessionLoadouts(): Record<ProfessionId, LoadoutSpec> {
+    const map = {} as Record<ProfessionId, LoadoutSpec>;
+    for (const p of PROFESSIONS) {
+        const colors = GROUP_COLORS[p.group] ?? GROUP_COLORS.NT;
+        map[p.id] = {
+            professionId: p.id,
+            weaponId: p.weaponStyle,
+            roleTag: p.combatStyle,
+            bodyColor: colors.body,
+            trimColor: colors.trim,
+            silhouette: STYLE_SILHOUETTE[p.weaponStyle],
+        };
+    }
+    return map;
+}
+
+const PROFESSION_LOADOUTS: Record<ProfessionId, LoadoutSpec> = buildProfessionLoadouts();
+
+/** Title screen shows a focused M1 pair + full 16 grid (pageable groups). */
+const TITLE_PROFESSION_ORDER: ProfessionId[] = PROFESSIONS.map((p) => p.id);
 
 @ccclass('RuntimeEntry')
 export class RuntimeEntry extends Component {
@@ -348,12 +358,41 @@ export class RuntimeEntry extends Component {
     private _voidChaserSpriteFrame: SpriteFrame | null = null;
     private readonly _coreTankSpriteNodes: Node[] = [];
     private _coreTankSpriteFrame: SpriteFrame | null = null;
+    /** MBTI hero battle sprites keyed by profession id. */
+    private readonly _heroSpriteFrames = new Map<ProfessionId, SpriteFrame>();
+    /** MBTI hero UI portraits (bust) keyed by profession id. */
+    private readonly _portraitSpriteFrames = new Map<ProfessionId, SpriteFrame>();
+    /** Emotion / archetype enemy sprites keyed by RuntimeEnemyType. */
+    private readonly _enemySpriteFrames = new Map<RuntimeEnemyType, SpriteFrame>();
+    /** Floor-specific boss sprites (1=Workplace Fear … 4=Self Abyss). */
+    private readonly _bossSpriteByFloor = new Map<number, SpriteFrame>();
+    /** Hex skill icons keyed by card id. */
+    private readonly _skillIconFrames = new Map<string, SpriteFrame>();
+    /** Ultimate ability icons keyed by UltimateId. */
+    private readonly _ultimateIconFrames = new Map<UltimateId, SpriteFrame>();
+    /** Floor arena maps keyed by floor 1-4. */
+    private readonly _floorMapFrames = new Map<number, SpriteFrame>();
+    /** Summon / ally sprites (turret, guard, element_sprite). */
+    private readonly _summonSpriteFrames = new Map<string, SpriteFrame>();
+    /** MBTI dimension passive icons E/I/S/N/T/F/J/P. */
+    private readonly _dimIconFrames = new Map<MbtiTrait, SpriteFrame>();
+    /** Weapon style icons blade/spear/gun/orb. */
+    private readonly _weaponIconFrames = new Map<WeaponStyleId, SpriteFrame>();
+    /** Misc UI chrome (heart, coin, energy, rarity frames, etc.). */
+    private readonly _uiIconFrames = new Map<string, SpriteFrame>();
+    /** VFX keyframes (slash, explosion, heal_ring, ...). */
+    private readonly _vfxFrames = new Map<string, SpriteFrame>();
+    /** Pooled sprite nodes per enemy type for multi-unit waves. */
+    private readonly _enemySpritePools = new Map<RuntimeEnemyType, Node[]>();
+    private readonly _summonSpriteNodes: Node[] = [];
     private _arenaPlayerSpriteNode: Node | null = null;
     private _arenaPlayerSprite: Sprite | null = null;
     private _damageTextLayer: Node | null = null;
     private _loadoutPreviewGraphics: Graphics | null = null;
     private _loadoutPreviewSpriteNode: Node | null = null;
     private _loadoutPreviewSprite: Sprite | null = null;
+    private _ultimateIconSprite: Sprite | null = null;
+    private _weaponPreviewSprite: Sprite | null = null;
     private _joystickBase: Node | null = null;
     private _joystickBaseGraphics: Graphics | null = null;
     private _joystickKnob: Node | null = null;
@@ -369,6 +408,7 @@ export class RuntimeEntry extends Component {
     private _rerollButton: Button | null = null;
     private _choiceButtons: Button[] = [];
     private _choiceLabels: Label[] = [];
+    private _choiceIconSprites: Sprite[] = [];
     private _choiceHandlers: Array<() => void> = [];
     private _hudLabel: Label | null = null;
     private _enemyLabel: Label | null = null;
@@ -389,8 +429,10 @@ export class RuntimeEntry extends Component {
     private _state = GameState.Boot;
     private _run: RunModel | null = null;
     private _language: RuntimeLanguage = 'en';
-    private _selectedProfessionId: ProfessionId = 'blade_adept';
-    private _selectedWeaponId: WeaponId = 'blade';
+    private _selectedProfessionId: ProfessionId = 'intj';
+    private _selectedWeaponId: WeaponId = 'gun';
+    private _titlePage = 0;
+    private _pageButton: Button | null = null;
     private _facingX = 1;
     private _facingY = 0;
     private _playerX = -240;
@@ -456,8 +498,8 @@ export class RuntimeEntry extends Component {
 
         this._menu = this._panel('MenuScreen', this._root, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0);
         this._block('MenuBg', this._menu, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, new Color(10, 14, 24, 255));
-        this._label('Title', this._menu, 'Rollvive', 50, -220, 196, new Color(246, 249, 255, 255));
-        this._label('Subtitle', this._menu, this._t('subtitle'), 16, -182, 158, new Color(170, 190, 218, 255));
+        this._label('Title', this._menu, 'Mind Dungeon', 42, -200, 208, new Color(246, 249, 255, 255));
+        this._label('Subtitle', this._menu, this._t('subtitle'), 14, -168, 172, new Color(170, 190, 218, 255));
         this._label('LanguageHint', this._menu, this._t('language'), 13, 294, 206, new Color(132, 164, 202, 255));
         const languages: RuntimeLanguage[] = ['en', 'zh'];
         languages.forEach((language, index) => {
@@ -467,22 +509,30 @@ export class RuntimeEntry extends Component {
             this._languageButtons.push(button);
             this._languageHandlers.push(handler);
         });
-        this._label('ProfessionHint', this._menu, this._t('loadouts'), 13, -318, 108, new Color(132, 164, 202, 255));
+        this._label('ProfessionHint', this._menu, this._t('loadouts'), 13, -318, 128, new Color(132, 164, 202, 255));
 
-        const professionSpacing = 154;
-        const professionStartX = -((PROFESSIONS.length - 1) * professionSpacing) / 2;
-        PROFESSIONS.forEach((profession, index) => {
-            const button = this._button(`Profession${index}`, this._menu!, this._professionButtonText(profession.id, false), 132, 58, professionStartX + index * professionSpacing - 132, 56);
-            const label = button.node.getChildByName(`Profession${index}Label`)?.getComponent(Label);
+        // 16 personalities in 2 pages of 8 (2×4 grid each).
+        const pageSize = 8;
+        for (let i = 0; i < pageSize; i += 1) {
+            const col = i % 4;
+            const row = Math.floor(i / 4);
+            const x = -300 + col * 118;
+            const y = 78 - row * 62;
+            const button = this._button(`Profession${i}`, this._menu!, '—', 108, 52, x, y);
+            const label = button.node.getChildByName(`Profession${i}Label`)?.getComponent(Label);
             if (label) {
-                label.fontSize = 14;
-                label.lineHeight = 18;
+                label.fontSize = 12;
+                label.lineHeight = 15;
             }
-            const handler = () => this._pickProfession(index);
+            const slot = i;
+            const handler = () => this._pickProfessionSlot(slot);
             button.node.on(Button.EventType.CLICK, handler, this);
             this._professionButtons.push(button);
             this._professionHandlers.push(handler);
-        });
+        }
+
+        this._pageButton = this._button('PageButton', this._menu, 'NT/NF →', 100, 36, -60, 128);
+        this._pageButton.node.on(Button.EventType.CLICK, this._cycleTitlePage, this);
 
         const previewNode = this._panel('LoadoutPreview', this._menu, 278, 266, 292, 0);
         this._loadoutPreviewGraphics = previewNode.addComponent(Graphics);
@@ -490,9 +540,19 @@ export class RuntimeEntry extends Component {
         this._loadoutPreviewSprite = this._loadoutPreviewSpriteNode.addComponent(Sprite);
         this._loadoutPreviewSprite.sizeMode = Sprite.SizeMode.CUSTOM;
         this._loadoutPreviewSpriteNode.active = false;
+        // Bound weapon style icon on loadout card.
+        const weaponIconNode = this._panel('WeaponPreviewIcon', previewNode, 48, 48, 100, -100);
+        this._weaponPreviewSprite = weaponIconNode.addComponent(Sprite);
+        this._weaponPreviewSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        weaponIconNode.active = false;
 
-        this._menuInfoLabel = this._label('MenuInfo', this._menu, '', 15, -212, -40, new Color(210, 224, 248, 255));
-        this._startButton = this._button('StartButton', this._menu, this._t('start'), 190, 48, -212, -174);
+        this._menuInfoLabel = this._label('MenuInfo', this._menu, '', 13, -200, -48, new Color(210, 224, 248, 255));
+        if (this._menuInfoLabel) {
+            this._menuInfoLabel.overflow = Label.Overflow.RESIZE_HEIGHT;
+            const transform = this._menuInfoLabel.node.getComponent(UITransform);
+            if (transform) transform.setContentSize(360, 90);
+        }
+        this._startButton = this._button('StartButton', this._menu, this._t('start'), 190, 48, -200, -168);
         this._startButton.node.on(Button.EventType.CLICK, this._startRun, this);
         this._refreshLoadoutButtons();
 
@@ -531,6 +591,11 @@ export class RuntimeEntry extends Component {
 
         this._shieldButton = this._button('ShieldButton', this._game, this._t('shield'), 132, 48, 246, -198);
         this._shieldButton.node.on(Button.EventType.CLICK, this._onPrimaryAction, this);
+        // Ultimate icon sits on the ULT button (left of label).
+        const ultIconNode = this._panel('UltimateIcon', this._shieldButton.node, 36, 36, -42, 0);
+        this._ultimateIconSprite = ultIconNode.addComponent(Sprite);
+        this._ultimateIconSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        ultIconNode.active = false;
         this._rerollButton = this._button('RerollButton', this._game, this._t('refresh'), 148, 48, 388, -198);
         this._rerollButton.node.on(Button.EventType.CLICK, this._rerollDraft, this);
 
@@ -538,9 +603,17 @@ export class RuntimeEntry extends Component {
             const button = this._button(`HexChoice${i}`, this._game, 'HEX', 190, 72, -318 + i * 212, -112);
             const label = button.node.getChildByName(`HexChoice${i}Label`)?.getComponent(Label);
             if (label) {
-                label.fontSize = 13;
-                label.lineHeight = 18;
+                label.fontSize = 12;
+                label.lineHeight = 16;
+                label.node.setPosition(18, 0, 0);
+                label.node.getComponent(UITransform)?.setContentSize(150, 64);
             }
+            // Skill icon sits left of the rarity-tinted name.
+            const iconNode = this._panel(`HexChoice${i}Icon`, button.node, 48, 48, -64, 0);
+            const iconSprite = iconNode.addComponent(Sprite);
+            iconSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            iconNode.active = false;
+            this._choiceIconSprites.push(iconSprite);
             const handler = () => this._pickChoice(i);
             button.node.on(Button.EventType.CLICK, handler, this);
             button.node.active = false;
@@ -553,51 +626,282 @@ export class RuntimeEntry extends Component {
     }
 
     private _loadRuntimeAssets(): void {
+        // Legacy fallback hero (kept until MBTI set is imported).
         resources.load('characters/knife_duelist/spriteFrame', SpriteFrame, (error, spriteFrame) => {
-            if (error) {
-                console.warn('[RuntimeEntry] Failed to load Knife Duelist sprite; using Graphics fallback.', error);
-                return;
+            if (error || !spriteFrame || !this.node.isValid) return;
+            if (!this._heroSpriteFrames.has(this._selectedProfessionId)) {
+                if (this._arenaPlayerSprite) this._arenaPlayerSprite.spriteFrame = spriteFrame;
+                if (this._loadoutPreviewSprite) this._loadoutPreviewSprite.spriteFrame = spriteFrame;
             }
-            if (!this.node.isValid) return;
-
-            if (this._arenaPlayerSprite) this._arenaPlayerSprite.spriteFrame = spriteFrame;
-            if (this._loadoutPreviewSprite) this._loadoutPreviewSprite.spriteFrame = spriteFrame;
             this._drawLoadoutPreview();
             this._drawArena();
         });
 
-        resources.load('enemies/void_chaser/spriteFrame', SpriteFrame, (error, spriteFrame) => {
-            if (error) {
-                console.warn('[RuntimeEntry] Failed to load Void Chaser sprite; using Graphics fallback.', error);
-                return;
+        // 16 MBTI personality battle sprites.
+        for (const profession of PROFESSIONS) {
+            const path = `characters/${profession.id}/spriteFrame`;
+            resources.load(path, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._heroSpriteFrames.set(profession.id, spriteFrame);
+                if (profession.id === this._selectedProfessionId) {
+                    this._applySelectedHeroSprite();
+                    this._drawLoadoutPreview();
+                    this._drawArena();
+                }
+            });
+        }
+
+        // 16 MBTI UI portraits (bust) for title loadout preview.
+        for (const profession of PROFESSIONS) {
+            resources.load(`portraits/${profession.id}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._portraitSpriteFrames.set(profession.id, spriteFrame);
+                if (profession.id === this._selectedProfessionId) {
+                    this._drawLoadoutPreview();
+                }
+            });
+        }
+
+        // Emotion / archetype enemies. Fall back to legacy void_chaser / core_tank names.
+        const enemyAssetMap: Array<{ type: RuntimeEnemyType; path: string; legacy?: boolean }> = [
+            { type: 'chaser', path: 'enemies/anxiety_spike' },
+            { type: 'anxiety', path: 'enemies/anxiety_spike' },
+            { type: 'doubt', path: 'enemies/doubt_orb' },
+            { type: 'swarm', path: 'enemies/doubt_swarm' },
+            { type: 'procrastination', path: 'enemies/delay_snail' },
+            { type: 'dasher', path: 'enemies/anger_lance' },
+            { type: 'spitter', path: 'enemies/comparison_shade' },
+            { type: 'binder', path: 'enemies/bind_shell' },
+            // Default boss art (Floor 1 Workplace Fear); floor map overrides below.
+            { type: 'boss', path: 'enemies/workplace_fear' },
+            // Perfection Statue elite tank; core_tank remains legacy fallback.
+            { type: 'tank', path: 'enemies/perfection_statue' },
+            { type: 'tank', path: 'enemies/core_tank', legacy: true },
+            { type: 'chaser', path: 'enemies/void_chaser', legacy: true },
+        ];
+        for (const entry of enemyAssetMap) {
+            resources.load(`${entry.path}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                // Prefer non-legacy emotion art when both exist.
+                if (entry.legacy && this._enemySpriteFrames.has(entry.type)) return;
+                this._enemySpriteFrames.set(entry.type, spriteFrame);
+                if (entry.type === 'chaser') this._voidChaserSpriteFrame = spriteFrame;
+                if (entry.type === 'tank') this._coreTankSpriteFrame = spriteFrame;
+                this._drawArena();
+            });
+        }
+
+        // Floor-specific boss portraits for waves 5/10/15/20.
+        const bossFloorAssets: Array<{ floor: number; path: string }> = [
+            { floor: 1, path: 'enemies/workplace_fear' },
+            { floor: 2, path: 'enemies/social_fear' },
+            { floor: 3, path: 'enemies/attachment_void' },
+            { floor: 4, path: 'enemies/self_abyss' },
+        ];
+        for (const entry of bossFloorAssets) {
+            resources.load(`${entry.path}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._bossSpriteByFloor.set(entry.floor, spriteFrame);
+                if (entry.floor === 1 && !this._enemySpriteFrames.has('boss')) {
+                    this._enemySpriteFrames.set('boss', spriteFrame);
+                }
+                this._drawArena();
+            });
+        }
+
+        // Prefer Mind Abyss arena; fall back to Crash Site. Floor maps override in battle.
+        const mapPaths = ['environment/mind_abyss_arena', 'environment/crash_site_arena'];
+        let mapLoaded = false;
+        for (const mapPath of mapPaths) {
+            resources.load(`${mapPath}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid || mapLoaded) return;
+                mapLoaded = true;
+                if (this._arenaMapSprite) this._arenaMapSprite.spriteFrame = spriteFrame;
+                this._drawArena();
+            });
+        }
+
+        // Floor-themed arenas (F1-F4).
+        const floorMaps: Array<{ floor: number; path: string }> = [
+            { floor: 1, path: 'environment/floor1_workplace' },
+            { floor: 2, path: 'environment/floor2_social' },
+            { floor: 3, path: 'environment/floor3_attachment' },
+            { floor: 4, path: 'environment/floor4_abyss' },
+        ];
+        for (const entry of floorMaps) {
+            resources.load(`${entry.path}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._floorMapFrames.set(entry.floor, spriteFrame);
+                this._applyFloorMap();
+            });
+        }
+
+        // Hex skill icons for draft choices (72 core + 16 exclusives).
+        for (const card of HEX_CARDS) {
+            resources.load(`skills/${card.id}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._skillIconFrames.set(card.id, spriteFrame);
+            });
+        }
+
+        // 16 ultimate ability icons.
+        for (const profession of PROFESSIONS) {
+            const ultId = profession.ultimateId;
+            resources.load(`ultimates/${ultId}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._ultimateIconFrames.set(ultId, spriteFrame);
+                if (profession.id === this._selectedProfessionId) this._syncUltimateButtonIcon();
+            });
+        }
+
+        // Summon / ally battle sprites.
+        const summons = [
+            { key: 'turret', path: 'summons/turret' },
+            { key: 'guard', path: 'summons/guard' },
+            { key: 'element_sprite', path: 'summons/element_sprite' },
+        ];
+        for (const entry of summons) {
+            resources.load(`${entry.path}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._summonSpriteFrames.set(entry.key, spriteFrame);
+            });
+        }
+
+        // MBTI dimension passive icons.
+        const dims: MbtiTrait[] = ['E', 'I', 'S', 'N', 'T', 'F', 'J', 'P'];
+        for (const dim of dims) {
+            resources.load(`dims/${dim.toLowerCase()}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._dimIconFrames.set(dim, spriteFrame);
+            });
+        }
+
+        // Weapon style icons.
+        const weapons: WeaponStyleId[] = ['blade', 'spear', 'gun', 'orb'];
+        for (const weapon of weapons) {
+            resources.load(`weapons/${weapon}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._weaponIconFrames.set(weapon, spriteFrame);
+                this._syncWeaponPreviewIcon();
+            });
+        }
+
+        // UI chrome + VFX keyframes (optional polish; safe if missing).
+        const uiKeys = [
+            'rarity_white', 'rarity_blue', 'rarity_purple', 'rarity_orange',
+            'boss_warning', 'joystick_base', 'joystick_knob', 'logo_mark',
+            'icon_heart', 'icon_coin', 'icon_energy', 'poster_title_vertical',
+        ];
+        for (const key of uiKeys) {
+            resources.load(`ui/${key}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._uiIconFrames.set(key, spriteFrame);
+            });
+        }
+        const vfxKeys = ['slash', 'explosion', 'heal_ring', 'time_ripple', 'shockwave'];
+        for (const key of vfxKeys) {
+            resources.load(`vfx/${key}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                if (error || !spriteFrame || !this.node.isValid) return;
+                this._vfxFrames.set(key, spriteFrame);
+            });
+        }
+    }
+
+    private _syncUltimateButtonIcon(): void {
+        const sprite = this._ultimateIconSprite;
+        if (!sprite) return;
+        const profession = PROFESSIONS.find((item) => item.id === this._selectedProfessionId) ?? PROFESSIONS[0];
+        const frame = this._ultimateIconFrames.get(profession.ultimateId) ?? null;
+        sprite.node.active = !!frame;
+        if (frame) sprite.spriteFrame = frame;
+    }
+
+    private _syncWeaponPreviewIcon(): void {
+        const sprite = this._weaponPreviewSprite;
+        if (!sprite) return;
+        const profession = PROFESSIONS.find((item) => item.id === this._selectedProfessionId) ?? PROFESSIONS[0];
+        const frame = this._weaponIconFrames.get(profession.weaponStyle) ?? null;
+        sprite.node.active = !!frame && this._state === GameState.Title;
+        if (frame) sprite.spriteFrame = frame;
+    }
+
+    private _applyFloorMap(): void {
+        if (!this._arenaMapSprite) return;
+        const floor = this._run ? Math.min(4, Math.max(1, getWavePlan(this._run.wave.wave).floor)) : 1;
+        const frame = this._floorMapFrames.get(floor)
+            ?? this._floorMapFrames.get(1)
+            ?? this._arenaMapSprite.spriteFrame;
+        if (frame) {
+            this._arenaMapSprite.spriteFrame = frame;
+            if (this._arenaMapSpriteNode) this._arenaMapSpriteNode.active = true;
+        }
+    }
+
+    private _summonKeyForUltimate(ult: UltimateId | null | undefined): string | null {
+        if (ult === 'deploy_turret') return 'turret';
+        if (ult === 'summon_guards') return 'guard';
+        if (ult === 'element_sprites') return 'element_sprite';
+        return null;
+    }
+
+    private _syncSummonSprites(): void {
+        if (!this._run || !this._enemySpriteLayer) {
+            this._summonSpriteNodes.forEach((node) => { node.active = false; });
+            return;
+        }
+        const ult = this._run.player.activeUltimateId;
+        const key = this._summonKeyForUltimate(ult);
+        const frame = key ? this._summonSpriteFrames.get(key) ?? null : null;
+        const active = this._state === GameState.Battle
+            && !!frame
+            && (this._run.player.ultimateTimer > 0);
+        if (!active || !frame || !key) {
+            this._summonSpriteNodes.forEach((node) => { node.active = false; });
+            return;
+        }
+        const count = key === 'guard' ? 4 : key === 'element_sprite' ? 5 : 2;
+        const size = key === 'turret' ? 56 : key === 'guard' ? 48 : 36;
+        while (this._summonSpriteNodes.length < count) {
+            const index = this._summonSpriteNodes.length;
+            const node = this._panel(`SummonSprite${index}`, this._enemySpriteLayer, size, size, 0, 0);
+            const sprite = node.addComponent(Sprite);
+            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+            node.active = false;
+            this._summonSpriteNodes.push(node);
+        }
+        const elapsed = this._run.wave.elapsedSeconds;
+        for (let i = 0; i < this._summonSpriteNodes.length; i += 1) {
+            const node = this._summonSpriteNodes[i];
+            if (i >= count) {
+                node.active = false;
+                continue;
             }
-            if (!this.node.isValid) return;
-
-            this._voidChaserSpriteFrame = spriteFrame;
-            this._drawArena();
-        });
-
-        resources.load('enemies/core_tank/spriteFrame', SpriteFrame, (error, spriteFrame) => {
-            if (error) {
-                console.warn('[RuntimeEntry] Failed to load Core Tank sprite; using Graphics fallback.', error);
-                return;
+            const sprite = node.getComponent(Sprite);
+            const angle = elapsed * (key === 'element_sprite' ? 2.2 : 1.1) + (i / count) * Math.PI * 2;
+            const radius = key === 'turret' ? 52 : key === 'guard' ? 70 : 44;
+            const x = this._playerX + Math.cos(angle) * radius;
+            const y = this._playerY + Math.sin(angle) * radius * 0.72;
+            node.active = true;
+            node.setPosition(x, y, 0);
+            node.setScale(1, 1, 1);
+            if (sprite) {
+                sprite.spriteFrame = frame;
+                sprite.color = new Color(255, 255, 255, 235);
             }
-            if (!this.node.isValid) return;
+        }
+    }
 
-            this._coreTankSpriteFrame = spriteFrame;
-            this._drawArena();
-        });
-
-        resources.load('environment/crash_site_arena/spriteFrame', SpriteFrame, (error, spriteFrame) => {
-            if (error) {
-                console.warn('[RuntimeEntry] Failed to load Crash Site map; using Graphics fallback.', error);
-                return;
+    private _applySelectedHeroSprite(): void {
+        let frame = this._heroSpriteFrames.get(this._selectedProfessionId) ?? null;
+        if (!frame) {
+            for (const value of this._heroSpriteFrames.values()) {
+                frame = value;
+                break;
             }
-            if (!this.node.isValid) return;
-
-            if (this._arenaMapSprite) this._arenaMapSprite.spriteFrame = spriteFrame;
-            this._drawArena();
-        });
+        }
+        if (!frame) return;
+        if (this._arenaPlayerSprite) this._arenaPlayerSprite.spriteFrame = frame;
+        if (this._loadoutPreviewSprite) this._loadoutPreviewSprite.spriteFrame = frame;
     }
 
     private _enterState(state: GameState): void {
@@ -633,11 +937,21 @@ export class RuntimeEntry extends Component {
         });
     }
 
-    private _pickProfession(index: number): void {
+    private _cycleTitlePage(): void {
+        this._titlePage = (this._titlePage + 1) % 2;
+        this._refreshLoadoutButtons();
+    }
+
+    private _pickProfessionSlot(slot: number): void {
+        const index = this._titlePage * 8 + slot;
         const profession = PROFESSIONS[index];
         if (!profession) return;
 
         this._selectedProfessionId = profession.id;
+        this._applySelectedHeroSprite();
+        this._syncUltimateButtonIcon();
+        this._syncWeaponPreviewIcon();
+        this._drawLoadoutPreview();
         this._selectedWeaponId = this._getLoadoutSpec().weaponId;
         this._refreshLoadoutButtons();
     }
@@ -656,10 +970,22 @@ export class RuntimeEntry extends Component {
     }
 
     private _refreshLoadoutButtons(): void {
+        const pageSize = 8;
         for (let i = 0; i < this._professionButtons.length; i += 1) {
-            const profession = PROFESSIONS[i];
-            const selected = profession?.id === this._selectedProfessionId;
+            const profession = PROFESSIONS[this._titlePage * pageSize + i];
+            if (!profession) {
+                this._professionButtons[i].node.active = false;
+                continue;
+            }
+            this._professionButtons[i].node.active = true;
+            const selected = profession.id === this._selectedProfessionId;
             this._setButtonText(this._professionButtons[i], this._professionButtonText(profession.id, selected));
+        }
+
+        if (this._pageButton) {
+            this._setButtonText(this._pageButton, this._titlePage === 0
+                ? (this._language === 'zh' ? 'NT/NF → SJ/SP' : 'NT/NF → SJ/SP')
+                : (this._language === 'zh' ? 'SJ/SP → NT/NF' : 'SJ/SP → NT/NF'));
         }
 
         for (let i = 0; i < this._weaponButtons.length; i += 1) {
@@ -674,25 +1000,47 @@ export class RuntimeEntry extends Component {
             const profession = PROFESSIONS.find((item) => item.id === this._selectedProfessionId) ?? PROFESSIONS[0];
             const weapon = WEAPON_SPECS[this._selectedWeaponId];
             const loadout = this._getLoadoutSpec();
-            const menuInfo = `${profession.name} / ${weapon.name} / ${loadout.roleTag}`;
+            const name = this._language === 'zh' ? profession.nameZh : profession.name;
+            const style = this._language === 'zh' ? profession.combatStyleZh : profession.combatStyle;
+            const ult = this._language === 'zh' ? profession.ultimateNameZh : profession.ultimateName;
+            const ultDesc = this._language === 'zh' ? profession.ultimateDescriptionZh : profession.ultimateDescription;
+            const traits = profession.traits.map((t) => {
+                const passive = DIMENSION_PASSIVES[t];
+                return this._language === 'zh' ? `${t}:${passive.nameZh}` : `${t}:${passive.name}`;
+            }).join(' · ');
             if (this._menuInfoLabel) {
-                this._menuInfoLabel.string = `${menuInfo}\n${weapon.shortName}: DMG x${weapon.damageMultiplier.toFixed(2)}  RANGE ${weapon.rangeBonus >= 0 ? '+' : ''}${weapon.rangeBonus}`;
+                this._menuInfoLabel.string = [
+                    `${profession.code} ${name} · ${style}`,
+                    `ATK ${profession.baseAtk}  HP ${profession.baseHp}  SPD ${profession.baseSpd}  ${weapon.shortName}`,
+                    `ULT ${ult}: ${ultDesc}`,
+                    traits,
+                ].join('\n');
             }
-            this._log(`${menuInfo}. ${weapon.description}`);
+            this._log(`${profession.code} ${name} — ${loadout.roleTag}. ${weapon.description}`);
             this._drawLoadoutPreview();
         }
     }
 
     private _startRun(): void {
+        this._selectedWeaponId = this._getLoadoutSpec().weaponId;
         this._rollSystem.reset(0, this._selectedProfessionId);
         this._run = createInitialRun({ professionId: this._selectedProfessionId, startingWave: 1 });
         this._applySelectedWeaponBaseStats();
+        // Seed locked skill list for J types (filled as lockable skills are picked).
+        if (this._run) {
+            this._run.player.lockedSkillIds = this._rollSystem.getLockedSkillIds();
+            this._run.player.energy = 35;
+        }
         this._clearFloatingTexts();
         this._attackTraces.length = 0;
         this._projectiles.length = 0;
         this._vfxPulses.length = 0;
         this._controlZones.length = 0;
         this._impactShards.length = 0;
+        const p = PROFESSIONS.find((item) => item.id === this._selectedProfessionId) ?? PROFESSIONS[0];
+        this._log(this._language === 'zh'
+            ? `以 ${p.code} ${p.nameZh} 进入意识深渊。`
+            : `Entering the Mind Dungeon as ${p.code} ${p.name}.`);
         this._startWave(1);
     }
 
@@ -752,6 +1100,7 @@ export class RuntimeEntry extends Component {
         this._run.wave.elapsedSeconds += dt;
         this._run.stats.timeSeconds += dt;
         this._perfFps = Math.round(1 / Math.max(0.001, dt));
+        this._tickUltimate(dt);
         this._movePlayer(dt);
         this._moveEnemies(dt);
         this._resolveContactDamage(dt);
@@ -785,6 +1134,85 @@ export class RuntimeEntry extends Component {
         }
     }
 
+    private _tickUltimate(dt: number): void {
+        if (!this._run || this._run.player.ultimateTimer <= 0) return;
+
+        const player = this._run.player;
+        player.ultimateTimer = Math.max(0, player.ultimateTimer - dt);
+
+        // ISFJ heal sanctuary: 8% HP/s
+        if (player.activeUltimateId === 'heal_sanctuary') {
+            const heal = player.maxHp * 0.08 * dt;
+            player.hp = Math.min(player.maxHp, player.hp + heal);
+        }
+
+        // Orbiting sprite / guard ticks (ENFP / ESTJ) — light periodic AOE near player
+        if (
+            (player.activeUltimateId === 'element_sprites' || player.activeUltimateId === 'summon_guards' || player.activeUltimateId === 'deploy_turret')
+            && Math.floor(player.ultimateTimer * 4) !== Math.floor((player.ultimateTimer + dt) * 4)
+        ) {
+            this._resolveUltimatePulseDamage();
+        }
+
+        if (player.ultimateTimer <= 0) {
+            this._clearUltimateState();
+        }
+    }
+
+    private _clearUltimateState(): void {
+        if (!this._run) return;
+        const p = this._run.player;
+        p.activeUltimateId = null;
+        p.ultimateDamageBonus = 0;
+        p.ultimateMoveBonus = 0;
+        p.ultimateCooldownMul = 1;
+        p.damageTakenMul = 1;
+        p.invulnerable = false;
+        p.blockAllDamage = false;
+        this._shieldTimer = 0;
+    }
+
+    private _resolveUltimatePulseDamage(): void {
+        if (!this._run) return;
+        const base = this._computeHitDamage(null).damage;
+        const pulse = Math.max(1, Math.round(base * 0.35));
+        let hits = 0;
+        for (let i = 0; i < this._run.wave.enemies.length && hits < 4; i += 1) {
+            const enemy = this._run.wave.enemies[i];
+            if (!enemy.alive) continue;
+            const pos = this._enemyPositions.get(enemy.id);
+            if (!pos) continue;
+            if (Math.hypot(pos.x - this._playerX, pos.y - this._playerY) > 110) continue;
+            const dealt = this._damageEnemy(i, pulse);
+            this._float(`-${dealt}`, pos.x, pos.y + 10, new Color(180, 220, 255, 255));
+            hits += 1;
+        }
+    }
+
+    private _computeHitDamage(enemy: RunEnemyModel | null) {
+        if (!this._run) {
+            return { damage: 1, isCritical: false, multipliers: [] as string[] };
+        }
+        const nearby = countNearbyEnemies(
+            this._run.wave.enemies,
+            this._enemyPositions,
+            this._playerX,
+            this._playerY,
+            INTROVERT_RADIUS,
+        );
+        const result = resolvePlayerHitDamage({
+            player: this._run.player,
+            profession: this._run.profession,
+            enemy,
+            nearbyEnemyCount: nearby,
+        });
+        // Consume N post-dodge bonus after one hit calculation
+        if (this._run.player.postDodgeBonus > 0) {
+            this._run.player.postDodgeBonus = 0;
+        }
+        return result;
+    }
+
     private _tickWaveSpawns(dt: number): void {
         if (!this._run) return;
 
@@ -805,7 +1233,9 @@ export class RuntimeEntry extends Component {
     private _movePlayer(dt: number): void {
         if (!this._run) return;
 
-        const speed = 132 * this._run.player.moveSpeed * this._getControlSlowMultiplier();
+        const ultMove = 1 + (this._run.player.ultimateMoveBonus || 0);
+        const speed = 132 * this._run.player.moveSpeed * ultMove * this._getControlSlowMultiplier();
+        // Time dilation slows enemies, not the player — already handled in enemy step.
         const move = this._getMoveVector();
         if (move.length() > 0.01) {
             this._facingX = move.x;
@@ -845,7 +1275,13 @@ export class RuntimeEntry extends Component {
             const distance = Math.max(1, Math.hypot(dx, dy));
             const archetype = ENEMY_ARCHETYPES[position.type];
             const waveSpeedBonus = Math.min(24, this._run.wave.wave * 2.2);
-            const step = (archetype.speed + waveSpeedBonus) * dt;
+            // INTJ time dilation / convert stun: slow enemies while ultimate is active
+            const ultSlow = this._run.player.activeUltimateId === 'time_dilation'
+                ? 0.3
+                : this._run.player.activeUltimateId === 'mind_convert'
+                    ? 0.55
+                    : 1;
+            const step = (archetype.speed + waveSpeedBonus) * dt * ultSlow;
 
             if (distance > CONTACT_RANGE + archetype.radius * 0.3) {
                 position.x = this._clampX(position.x + (dx / distance) * step);
@@ -924,13 +1360,18 @@ export class RuntimeEntry extends Component {
         const distance = Math.max(1, Math.hypot(dx, dy));
         const archetype = ENEMY_ARCHETYPES.boss;
         const phaseTwo = enemy.hp <= enemy.maxHp * 0.52;
+        const floor = this._run ? Math.min(4, Math.max(1, getWavePlan(this._run.wave.wave).floor)) : 1;
 
         if (position.windupTimer > 0) {
             position.windupTimer = Math.max(0, position.windupTimer - dt);
             position.warningTimer = position.windupTimer;
             if (position.windupTimer <= 0) {
-                this._spawnBossBurst(position, phaseTwo);
-                position.actionTimer = phaseTwo ? 1.75 : 2.35;
+                this._spawnBossAttack(position, phaseTwo, floor);
+                // Floor-tuned recovery: higher floors recover faster in phase 2.
+                const recover = phaseTwo
+                    ? (floor === 1 ? 1.75 : floor === 2 ? 1.55 : floor === 3 ? 1.4 : 1.25)
+                    : (floor === 1 ? 2.35 : floor === 2 ? 2.15 : floor === 3 ? 2.0 : 1.85);
+                position.actionTimer = recover;
             }
             return true;
         }
@@ -938,54 +1379,263 @@ export class RuntimeEntry extends Component {
         position.actionTimer = Math.max(0, position.actionTimer - dt);
         position.warningTimer = Math.max(0, position.warningTimer - dt);
 
-        const preferredDistance = phaseTwo ? 74 : 92;
-        const step = (archetype.speed + (phaseTwo ? 22 : 8)) * dt;
+        // F1 keeps distance & radial; F2 kites mid-range; F3 orbits close; F4 aggressive chase.
+        const preferredDistance = phaseTwo
+            ? (floor === 1 ? 74 : floor === 2 ? 88 : floor === 3 ? 62 : 58)
+            : (floor === 1 ? 92 : floor === 2 ? 108 : floor === 3 ? 78 : 70);
+        const speedBonus = phaseTwo
+            ? (floor === 1 ? 22 : floor === 2 ? 18 : floor === 3 ? 28 : 34)
+            : (floor === 1 ? 8 : floor === 2 ? 10 : floor === 3 ? 14 : 18);
+        const step = (archetype.speed + speedBonus) * dt;
+
         if (distance > preferredDistance + 18) {
             position.x = this._clampX(position.x + (dx / distance) * step);
             position.y = this._clampY(position.y + (dy / distance) * step);
         } else if (distance < preferredDistance - 18) {
             position.x = this._clampX(position.x - (dx / distance) * step * 0.65);
             position.y = this._clampY(position.y - (dy / distance) * step * 0.65);
+        } else if (floor >= 3) {
+            // Orbit laterally on F3/F4 so the boss never stands still.
+            const orbit = step * (phaseTwo ? 0.85 : 0.55);
+            position.x = this._clampX(position.x + (-dy / distance) * orbit);
+            position.y = this._clampY(position.y + (dx / distance) * orbit);
         }
 
-        if (position.actionTimer <= 0 && distance <= 210) {
-            position.windupTimer = phaseTwo ? 0.38 : 0.58;
-            position.warningTimer = position.windupTimer;
-            this._pulse(position.x, position.y, 16, phaseTwo ? 62 : 48, position.windupTimer, new Color(255, 84, 132, 210), 4);
-            this._log(phaseTwo ? 'Boss enraged: faster radial burst incoming.' : 'Boss charging radial burst.');
+        const engageRange = floor === 4 ? 240 : floor === 3 ? 220 : 210;
+        if (position.actionTimer <= 0 && distance <= engageRange) {
+            const windup = phaseTwo
+                ? (floor === 1 ? 0.38 : floor === 2 ? 0.34 : floor === 3 ? 0.3 : 0.26)
+                : (floor === 1 ? 0.58 : floor === 2 ? 0.5 : floor === 3 ? 0.46 : 0.42);
+            position.windupTimer = windup;
+            position.warningTimer = windup;
+            const warnColor = floor === 4
+                ? new Color(160, 90, 255, 220)
+                : floor === 3
+                    ? new Color(255, 110, 180, 210)
+                    : floor === 2
+                        ? new Color(255, 140, 90, 210)
+                        : new Color(255, 84, 132, 210);
+            this._pulse(position.x, position.y, 16, phaseTwo ? 62 : 48, windup, warnColor, 4);
+            this._log(this._bossWindupLog(floor, phaseTwo));
         }
 
         return true;
     }
 
-    private _spawnBossBurst(position: EnemyPosition, phaseTwo: boolean): void {
+    private _bossWindupLog(floor: number, phaseTwo: boolean): string {
+        if (this._language === 'zh') {
+            if (floor === 1) return phaseTwo ? '职场恐惧进入二阶段：文件风暴加速。' : '职场恐惧蓄力：放射文件风暴。';
+            if (floor === 2) return phaseTwo ? '社交审判进入二阶段：扇形嘲讽。' : '社交审判蓄力：扇形评判。';
+            if (floor === 3) return phaseTwo ? '依恋虚空进入二阶段：螺旋牵引。' : '依恋虚空蓄力：螺旋虚空。';
+            return phaseTwo ? '自我深渊进入二阶段：十字存在风暴。' : '自我深渊蓄力：十字风暴。';
+        }
+        if (floor === 1) return phaseTwo ? 'Boss enraged: faster radial burst incoming.' : 'Boss charging radial burst.';
+        if (floor === 2) return phaseTwo ? 'Social Fear enraged: denser fan judgment.' : 'Social Fear charging fan judgment.';
+        if (floor === 3) return phaseTwo ? 'Attachment Void enraged: spiral pull.' : 'Attachment Void charging spiral void.';
+        return phaseTwo ? 'Self Abyss enraged: cross-storm.' : 'Self Abyss charging cross-storm.';
+    }
+
+    /** Floor-specific boss projectile patterns (phase 1 / phase 2 at ≤52% HP). */
+    private _spawnBossAttack(position: EnemyPosition, phaseTwo: boolean, floor: number): void {
+        if (floor === 2) {
+            this._spawnBossFan(position, phaseTwo);
+        } else if (floor === 3) {
+            this._spawnBossSpiral(position, phaseTwo);
+        } else if (floor === 4) {
+            this._spawnBossCross(position, phaseTwo);
+        } else {
+            this._spawnBossRadial(position, phaseTwo);
+        }
+    }
+
+    /** F1 Workplace Fear — classic radial file storm. */
+    private _spawnBossRadial(position: EnemyPosition, phaseTwo: boolean): void {
         const count = phaseTwo ? 12 : 8;
         const speed = phaseTwo ? 138 : 112;
         const damage = phaseTwo ? 12 : 9;
         const offset = phaseTwo ? Math.PI / 12 : 0;
-
-        for (let i = 0; i < count; i += 1) {
-            if (this._projectiles.length >= MOBILE_PERFORMANCE_BUDGET.maxActiveProjectiles) {
-                this._projectiles.shift();
-            }
-            const angle = offset + (Math.PI * 2 * i) / count;
-            this._projectiles.push({
-                x: position.x + Math.cos(angle) * 18,
-                y: position.y + Math.sin(angle) * 18,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
-                damage,
-                radius: phaseTwo ? 6 : 5,
-                ttl: phaseTwo ? 2.8 : 2.45,
-                color: phaseTwo ? new Color(255, 92, 144, 230) : new Color(255, 178, 92, 225),
-                owner: 'enemy',
-            });
-        }
-
+        this._emitBossProjectiles(position, count, speed, damage, offset, 0, phaseTwo
+            ? new Color(255, 92, 144, 230)
+            : new Color(255, 178, 92, 225), phaseTwo);
         if (phaseTwo) {
             this._spawnControlZone(this._clampX(this._playerX), this._clampY(this._playerY), 8);
         }
-        this._pulse(position.x, position.y, 22, phaseTwo ? 72 : 56, 0.38, phaseTwo ? new Color(255, 92, 144, 230) : new Color(255, 178, 92, 220), 4);
+        this._pulse(position.x, position.y, 22, phaseTwo ? 72 : 56, 0.38,
+            phaseTwo ? new Color(255, 92, 144, 230) : new Color(255, 178, 92, 220), 4);
+    }
+
+    /** F2 Social Fear — fan toward player + side judgment shots. */
+    private _spawnBossFan(position: EnemyPosition, phaseTwo: boolean): void {
+        const dx = this._playerX - position.x;
+        const dy = this._playerY - position.y;
+        const base = Math.atan2(dy, dx);
+        const count = phaseTwo ? 9 : 5;
+        const spread = phaseTwo ? 0.95 : 0.72;
+        const speed = phaseTwo ? 148 : 120;
+        const damage = phaseTwo ? 11 : 8;
+        const color = phaseTwo ? new Color(255, 150, 80, 235) : new Color(255, 190, 110, 225);
+        for (let i = 0; i < count; i += 1) {
+            const t = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+            const angle = base + t * spread;
+            this._pushEnemyProjectile(
+                position.x + Math.cos(angle) * 16,
+                position.y + Math.sin(angle) * 16,
+                Math.cos(angle) * speed,
+                Math.sin(angle) * speed,
+                damage,
+                phaseTwo ? 6 : 5,
+                phaseTwo ? 2.6 : 2.3,
+                color,
+            );
+        }
+        // Phase 2: extra reverse fan from boss flanks.
+        if (phaseTwo) {
+            for (const side of [-1, 1]) {
+                const angle = base + side * (Math.PI * 0.55);
+                this._pushEnemyProjectile(
+                    position.x + Math.cos(angle) * 14,
+                    position.y + Math.sin(angle) * 14,
+                    Math.cos(angle) * (speed * 0.85),
+                    Math.sin(angle) * (speed * 0.85),
+                    damage - 1,
+                    5,
+                    2.2,
+                    new Color(255, 120, 70, 220),
+                );
+            }
+            this._spawnControlZone(this._clampX(this._playerX), this._clampY(this._playerY), 7);
+        }
+        this._pulse(position.x, position.y, 20, phaseTwo ? 68 : 52, 0.36, color, 4);
+    }
+
+    /** F3 Attachment Void — spiral arms that curve inward. */
+    private _spawnBossSpiral(position: EnemyPosition, phaseTwo: boolean): void {
+        const arms = phaseTwo ? 4 : 3;
+        const perArm = phaseTwo ? 5 : 4;
+        const baseSpeed = phaseTwo ? 126 : 102;
+        const damage = phaseTwo ? 11 : 8;
+        const color = phaseTwo ? new Color(255, 100, 190, 235) : new Color(220, 120, 200, 225);
+        const spin = phaseTwo ? 0.55 : 0.38;
+        for (let arm = 0; arm < arms; arm += 1) {
+            const armBase = (Math.PI * 2 * arm) / arms;
+            for (let k = 0; k < perArm; k += 1) {
+                const angle = armBase + k * spin;
+                const speed = baseSpeed + k * 14;
+                this._pushEnemyProjectile(
+                    position.x + Math.cos(angle) * (12 + k * 4),
+                    position.y + Math.sin(angle) * (12 + k * 4),
+                    Math.cos(angle) * speed,
+                    Math.sin(angle) * speed,
+                    damage,
+                    phaseTwo ? 6 : 5,
+                    phaseTwo ? 2.9 : 2.5,
+                    color,
+                );
+            }
+        }
+        if (phaseTwo) {
+            // Pull zone on player — attachment metaphor.
+            this._spawnControlZone(this._clampX(this._playerX), this._clampY(this._playerY), 10);
+            this._spawnControlZone(this._clampX(position.x), this._clampY(position.y), 6);
+        }
+        this._pulse(position.x, position.y, 24, phaseTwo ? 78 : 60, 0.4, color, 4);
+    }
+
+    /** F4 Self Abyss — cross storm + diagonal ring. */
+    private _spawnBossCross(position: EnemyPosition, phaseTwo: boolean): void {
+        const axes = phaseTwo
+            ? [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4, Math.PI, (5 * Math.PI) / 4, (3 * Math.PI) / 2, (7 * Math.PI) / 4]
+            : [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+        const perAxis = phaseTwo ? 4 : 3;
+        const speed = phaseTwo ? 155 : 128;
+        const damage = phaseTwo ? 13 : 10;
+        const color = phaseTwo ? new Color(170, 100, 255, 240) : new Color(140, 120, 255, 230);
+        for (const axis of axes) {
+            for (let k = 0; k < perAxis; k += 1) {
+                const s = speed + k * 18;
+                this._pushEnemyProjectile(
+                    position.x + Math.cos(axis) * (10 + k * 6),
+                    position.y + Math.sin(axis) * (10 + k * 6),
+                    Math.cos(axis) * s,
+                    Math.sin(axis) * s,
+                    damage,
+                    phaseTwo ? 7 : 5,
+                    phaseTwo ? 3.0 : 2.55,
+                    color,
+                );
+            }
+        }
+        if (phaseTwo) {
+            // Extra aimed shot at player + dual control zones.
+            const dx = this._playerX - position.x;
+            const dy = this._playerY - position.y;
+            const dist = Math.max(1, Math.hypot(dx, dy));
+            this._pushEnemyProjectile(
+                position.x,
+                position.y,
+                (dx / dist) * 170,
+                (dy / dist) * 170,
+                14,
+                7,
+                2.4,
+                new Color(200, 80, 255, 245),
+            );
+            this._spawnControlZone(this._clampX(this._playerX), this._clampY(this._playerY), 11);
+            this._spawnControlZone(
+                this._clampX(this._playerX + this._facingX * 40),
+                this._clampY(this._playerY + this._facingY * 40),
+                7,
+            );
+        }
+        this._pulse(position.x, position.y, 26, phaseTwo ? 84 : 64, 0.42, color, 5);
+    }
+
+    private _emitBossProjectiles(
+        position: EnemyPosition,
+        count: number,
+        speed: number,
+        damage: number,
+        offset: number,
+        _unusedSpread: number,
+        color: Color,
+        phaseTwo: boolean,
+    ): void {
+        for (let i = 0; i < count; i += 1) {
+            const angle = offset + (Math.PI * 2 * i) / count;
+            this._pushEnemyProjectile(
+                position.x + Math.cos(angle) * 18,
+                position.y + Math.sin(angle) * 18,
+                Math.cos(angle) * speed,
+                Math.sin(angle) * speed,
+                damage,
+                phaseTwo ? 6 : 5,
+                phaseTwo ? 2.8 : 2.45,
+                color,
+            );
+        }
+    }
+
+    private _pushEnemyProjectile(
+        x: number,
+        y: number,
+        vx: number,
+        vy: number,
+        damage: number,
+        radius: number,
+        ttl: number,
+        color: Color,
+    ): void {
+        if (this._projectiles.length >= MOBILE_PERFORMANCE_BUDGET.maxActiveProjectiles) {
+            this._projectiles.shift();
+        }
+        this._projectiles.push({
+            x, y, vx, vy, damage, radius, ttl, color, owner: 'enemy',
+        });
+    }
+
+    /** @deprecated kept as alias for any external call sites */
+    private _spawnBossBurst(position: EnemyPosition, phaseTwo: boolean): void {
+        this._spawnBossRadial(position, phaseTwo);
     }
 
     private _moveBinder(position: EnemyPosition, dt: number): boolean {
@@ -1022,10 +1672,18 @@ export class RuntimeEntry extends Component {
         if (this._attackTimer > 0) return;
 
         const weapon = this._getWeaponSpec();
-        const cooldown = Math.max(0.18, this._run.player.attackCooldown);
+        const cooldownMul = Math.max(0.25, this._run.player.ultimateCooldownMul || 1);
+        const cooldown = Math.max(0.12, this._run.player.attackCooldown * cooldownMul);
         this._attackTimer += cooldown;
 
-        const damage = calculatePlayerDamage(this._run.player);
+        const hit = this._computeHitDamage(null);
+        const damage = hit.damage;
+        // Gain ultimate energy per attack
+        this._run.player.energy = Math.min(
+            MAX_ULTIMATE_ENERGY,
+            this._run.player.energy + Math.max(4, this._run.player.energyPerAttack * 0.45),
+        );
+
         if (weapon.id === 'blade') {
             this._resolveBladeSwing(damage, weapon);
             return;
@@ -1219,7 +1877,7 @@ export class RuntimeEntry extends Component {
     private _resolveContactDamage(dt: number): void {
         if (!this._run) return;
 
-        const shielded = this._shieldTimer > 0;
+        const shielded = this._shieldTimer > 0 || this._run.player.blockAllDamage || this._run.player.invulnerable;
         this._shieldTimer = Math.max(0, this._shieldTimer - dt);
         let totalDamage = 0;
 
@@ -1231,14 +1889,33 @@ export class RuntimeEntry extends Component {
 
             position.contactCooldown = Math.max(0, position.contactCooldown - dt);
             if (position.contactCooldown > 0) continue;
-            const archetype = ENEMY_ARCHETYPES[position.type];
+            const archetype = ENEMY_ARCHETYPES[position.type] ?? ENEMY_ARCHETYPES.chaser;
             if (Math.hypot(position.x - this._playerX, position.y - this._playerY) > CONTACT_RANGE + archetype.radius * 0.2) continue;
 
             position.contactCooldown = archetype.contactCooldown;
+            if (this._run.player.invulnerable || this._run.player.blockAllDamage) {
+                this._float('BLOCK', this._playerX, this._playerY + 22, new Color(120, 224, 255, 255));
+                // ISTP parry counter: retaliate
+                if (this._run.player.activeUltimateId === 'perfect_parry') {
+                    const counter = this._computeHitDamage(enemy).damage * 3;
+                    const idx = this._run.wave.enemies.indexOf(enemy);
+                    if (idx >= 0) {
+                        const dealt = this._damageEnemy(idx, Math.round(counter));
+                        this._float(`-${dealt}`, position.x, position.y + 16, new Color(255, 200, 80, 255));
+                    }
+                }
+                continue;
+            }
+            if (this._tryDodge(position.x, position.y)) continue;
+
             const armorReduction = Math.min(0.7, this._run.player.armor / (this._run.player.armor + 100));
             const shieldReduction = shielded ? 0.62 + this._run.player.shieldReduction * 0.2 : 0;
-            const damage = Math.max(1, Math.round(enemy.damage * (1 - armorReduction) * (1 - Math.min(0.85, shieldReduction))));
-            if (this._tryDodge(position.x, position.y)) continue;
+            let damage = Math.max(1, Math.round(enemy.damage * (1 - armorReduction) * (1 - Math.min(0.85, shieldReduction))));
+            damage = Math.max(1, Math.round(damage * (this._run.player.damageTakenMul || 1)));
+            // ENFJ aura: enemies deal less
+            if (this._run.player.activeUltimateId === 'aura_command') {
+                damage = Math.max(1, Math.round(damage * 0.4));
+            }
             this._run.player.hp = Math.max(0, this._run.player.hp - damage);
             this._run.stats.damageTaken += damage;
             totalDamage += damage;
@@ -1337,9 +2014,16 @@ export class RuntimeEntry extends Component {
             }
 
             if (Math.hypot(projectile.x - this._playerX, projectile.y - this._playerY) <= PLAYER_RADIUS + projectile.radius) {
+                if (this._run.player.invulnerable || this._run.player.blockAllDamage) {
+                    this._float('BLOCK', this._playerX, this._playerY + 18, new Color(120, 224, 255, 255));
+                    this._projectiles.splice(i, 1);
+                    continue;
+                }
                 const armorReduction = Math.min(0.7, this._run.player.armor / (this._run.player.armor + 100));
-                const shieldReduction = shielded ? 0.66 + this._run.player.shieldReduction * 0.2 : 0;
-                const damage = Math.max(1, Math.round(projectile.damage * (1 - armorReduction) * (1 - Math.min(0.85, shieldReduction))));
+                const shieldReduction = shielded || this._run.player.blockAllDamage ? 0.66 + this._run.player.shieldReduction * 0.2 : 0;
+                let damage = Math.max(1, Math.round(projectile.damage * (1 - armorReduction) * (1 - Math.min(0.85, shieldReduction))));
+                damage = Math.max(1, Math.round(damage * (this._run.player.damageTakenMul || 1)));
+                if (this._run.player.activeUltimateId === 'aura_command') damage = Math.max(1, Math.round(damage * 0.4));
                 if (this._tryDodge(projectile.x, projectile.y)) {
                     this._projectiles.splice(i, 1);
                     continue;
@@ -1444,12 +2128,187 @@ export class RuntimeEntry extends Component {
     }
 
     private _activateShield(): void {
+        // Legacy name — now fires personality ultimate.
+        this._activateUltimate();
+    }
+
+    private _activateUltimate(): void {
         if (!this._run || this._state !== GameState.Battle) return;
 
-        this._shieldTimer = 1.25;
-        this._pulse(this._playerX, this._playerY, 16, 42, 0.42, new Color(120, 224, 255, 220), 3);
-        this._log(this._fmt('shieldUp', { seconds: '1.25' }));
+        const profession = this._run.profession;
+        const cost = profession.ultimateEnergyCost || MAX_ULTIMATE_ENERGY;
+        if (this._run.player.energy < cost) {
+            this._log(this._fmt('energyLow', { energy: Math.floor(this._run.player.energy) }));
+            return;
+        }
+        if (this._run.player.ultimateTimer > 0) {
+            this._log(this._language === 'zh' ? '大招仍在持续。' : 'Ultimate still active.');
+            return;
+        }
+
+        this._run.player.energy = 0;
+        this._run.player.activeUltimateId = profession.ultimateId;
+        this._run.player.ultimateTimer = profession.ultimateDuration;
+        const ultMul = Math.max(1, this._run.player.ultimateMultiplier || 1);
+        const name = this._language === 'zh' ? profession.ultimateNameZh : profession.ultimateName;
+
+        switch (profession.ultimateId) {
+            case 'time_dilation':
+                this._run.player.ultimateDamageBonus = 1.5 * ultMul;
+                break;
+            case 'chain_bomb':
+                this._resolveScreenBurst(8 * ultMul);
+                this._run.player.ultimateTimer = 0.4;
+                break;
+            case 'elite_mark':
+                this._run.player.ultimateDamageBonus = 0.5;
+                break;
+            case 'mind_convert':
+                this._weakenLivingEnemies(0.4);
+                break;
+            case 'screen_mark':
+                this._run.player.ultimateDamageBonus = 2.0 * ultMul;
+                break;
+            case 'phoenix_form':
+                this._run.player.invulnerable = true;
+                this._run.player.ultimateDamageBonus = 1.5 * ultMul;
+                this._shieldTimer = profession.ultimateDuration;
+                break;
+            case 'aura_command':
+                this._run.player.ultimateDamageBonus = 0.8 * ultMul;
+                this._run.player.damageTakenMul = 0.4;
+                break;
+            case 'element_sprites':
+                this._run.player.ultimateDamageBonus = 0.3;
+                break;
+            case 'deploy_turret':
+                this._run.player.ultimateDamageBonus = 0.2;
+                break;
+            case 'heal_sanctuary':
+                this._run.player.damageTakenMul = 0.5;
+                this._shieldTimer = profession.ultimateDuration;
+                break;
+            case 'summon_guards':
+                this._run.player.ultimateDamageBonus = 0.25;
+                break;
+            case 'full_restore':
+                this._run.player.hp = this._run.player.maxHp;
+                this._run.player.ultimateDamageBonus = 0.8 * ultMul;
+                break;
+            case 'perfect_parry':
+                this._run.player.blockAllDamage = true;
+                this._shieldTimer = profession.ultimateDuration;
+                break;
+            case 'element_spread':
+                this._resolveRadialBurst(12, 2.0 * ultMul);
+                this._run.player.ultimateTimer = 0.5;
+                break;
+            case 'berserk_surge':
+                this._run.player.ultimateCooldownMul = 1 / 3;
+                this._run.player.ultimateMoveBonus = 0.6;
+                this._run.player.ultimateDamageBonus = 0.35;
+                break;
+            case 'taunt_shockwave':
+                this._pullEnemiesTowardPlayer();
+                this._resolveScreenBurst(4.0 * ultMul);
+                this._run.player.ultimateTimer = 0.8;
+                break;
+            default:
+                this._run.player.ultimateDamageBonus = 0.5;
+                break;
+        }
+
+        this._pulse(this._playerX, this._playerY, 20, 64, 0.55, new Color(180, 140, 255, 230), 4);
+        this._float('ULT', this._playerX, this._playerY + 40, new Color(210, 170, 255, 255));
+        this._log(this._fmt('ultimateUsed', { name }));
         this._renderHud();
+    }
+
+    private _resolveScreenBurst(damageMul: number): void {
+        if (!this._run) return;
+        const base = this._computeHitDamage(null).damage;
+        const dmg = Math.max(1, Math.round(base * damageMul));
+        for (let i = 0; i < this._run.wave.enemies.length; i += 1) {
+            const enemy = this._run.wave.enemies[i];
+            if (!enemy.alive) continue;
+            const pos = this._enemyPositions.get(enemy.id);
+            const dealt = this._damageEnemy(i, dmg);
+            if (pos) {
+                this._float(`-${dealt}`, pos.x, pos.y + 14, new Color(255, 180, 80, 255));
+                this._pulse(pos.x, pos.y, 8, 28, 0.3, new Color(255, 160, 60, 220), 3);
+            }
+        }
+    }
+
+    private _resolveRadialBurst(count: number, damageMul: number): void {
+        if (!this._run) return;
+        const base = this._computeHitDamage(null).damage;
+        const dmg = Math.max(1, Math.round(base * damageMul));
+        const weapon = this._getWeaponSpec();
+        const range = 130;
+        const hitSet = new Set<string>();
+        for (let i = 0; i < count; i += 1) {
+            const angle = (Math.PI * 2 * i) / count;
+            for (let e = 0; e < this._run.wave.enemies.length; e += 1) {
+                const enemy = this._run.wave.enemies[e];
+                if (!enemy.alive || hitSet.has(enemy.id)) continue;
+                const pos = this._enemyPositions.get(enemy.id);
+                if (!pos) continue;
+                const dx = pos.x - this._playerX;
+                const dy = pos.y - this._playerY;
+                const dist = Math.hypot(dx, dy);
+                if (dist > range) continue;
+                const ang = Math.atan2(dy, dx);
+                let delta = Math.abs(ang - angle);
+                while (delta > Math.PI) delta = Math.abs(delta - Math.PI * 2);
+                if (delta > 0.4) continue;
+                hitSet.add(enemy.id);
+                const dealt = this._damageEnemy(e, dmg);
+                this._float(`-${dealt}`, pos.x, pos.y + 12, weapon.color);
+            }
+            this._attackTraces.push({
+                fromX: this._playerX,
+                fromY: this._playerY,
+                toX: this._playerX + Math.cos(angle) * range,
+                toY: this._playerY + Math.sin(angle) * range,
+                ttl: 0.28,
+                duration: 0.28,
+                color: weapon.color,
+                kind: 'line',
+            });
+        }
+    }
+
+    private _weakenLivingEnemies(ratio: number): void {
+        if (!this._run) return;
+        const living = this._run.wave.enemies.filter((e) => e.alive);
+        const count = Math.max(1, Math.floor(living.length * ratio));
+        for (let i = 0; i < count; i += 1) {
+            const enemy = living[i];
+            const idx = this._run.wave.enemies.findIndex((e) => e.id === enemy.id);
+            if (idx < 0) continue;
+            this._run.wave.enemies[idx] = {
+                ...enemy,
+                damage: Math.max(1, Math.round(enemy.damage * 0.35)),
+                hp: Math.max(1, Math.round(enemy.hp * 0.7)),
+            };
+            const pos = this._enemyPositions.get(enemy.id);
+            if (pos) this._float('CONV', pos.x, pos.y + 12, new Color(160, 255, 180, 255));
+        }
+    }
+
+    private _pullEnemiesTowardPlayer(): void {
+        if (!this._run) return;
+        for (const enemy of this._run.wave.enemies) {
+            if (!enemy.alive) continue;
+            const pos = this._enemyPositions.get(enemy.id);
+            if (!pos) continue;
+            const dx = this._playerX - pos.x;
+            const dy = this._playerY - pos.y;
+            const dist = Math.max(1, Math.hypot(dx, dy));
+            pos.x = this._clampX(pos.x + (dx / dist) * Math.min(90, dist * 0.55));
+            pos.y = this._clampY(pos.y + (dy / dist) * Math.min(90, dist * 0.55));
+        }
     }
 
     private _onPrimaryAction(): void {
@@ -1458,7 +2317,7 @@ export class RuntimeEntry extends Component {
             return;
         }
 
-        this._activateShield();
+        this._activateUltimate();
     }
 
     private _enterWaveClear(): void {
@@ -1550,10 +2409,11 @@ export class RuntimeEntry extends Component {
         const waveScale = Math.max(0, this._run.wave.wave - 1);
         const bossScale = archetype.rank === 'boss' ? 1 + waveScale * 0.18 : 1 + waveScale * 0.14;
         const id = `w${this._run.wave.wave}_${type}_spawn_${this._spawnSerial++}`;
+        const floor = Math.min(4, Math.max(1, getWavePlan(this._run.wave.wave).floor));
         const enemy = createEnemy({
             id,
             configId: type,
-            name: archetype.rank === 'boss' ? `${archetype.name} W${this._run.wave.wave}` : archetype.name,
+            name: archetype.rank === 'boss' ? this._bossDisplayName(floor) : archetype.name,
             rank: archetype.rank,
             maxHp: Math.round(archetype.hp * bossScale),
             damage: Math.round(archetype.damage * (1 + waveScale * 0.09)),
@@ -1591,13 +2451,30 @@ export class RuntimeEntry extends Component {
     }
 
     private _pickContinuousEnemyType(wave: number): RuntimeEnemyType {
-        const pool: RuntimeEnemyType[] = ['chaser', 'chaser', 'swarm'];
-        if (wave >= 2) pool.push('tank');
-        if (wave >= 4) pool.push('dasher');
+        const pool: RuntimeEnemyType[] = ['chaser', 'chaser', 'swarm', 'anxiety'];
+        if (wave >= 2) pool.push('tank', 'doubt');
+        if (wave >= 3) pool.push('anxiety', 'swarm');
+        if (wave >= 4) pool.push('dasher', 'procrastination');
         if (wave >= 6) pool.push('spitter');
         if (wave >= 8) pool.push('binder');
-        if (wave >= 11) pool.push('swarm', 'dasher', 'spitter');
+        // F3 self-judgment: denser control + doubt
+        if (wave >= 11) pool.push('swarm', 'dasher', 'spitter', 'anxiety', 'doubt', 'binder');
+        // F4 existential: heavy mixed pressure
+        if (wave >= 16) pool.push('tank', 'dasher', 'spitter', 'binder', 'procrastination', 'swarm');
         return pool[Math.floor(Math.random() * pool.length)] ?? 'chaser';
+    }
+
+    private _bossDisplayName(floor: number): string {
+        if (this._language === 'zh') {
+            if (floor === 1) return '职场恐惧';
+            if (floor === 2) return '社交审判';
+            if (floor === 3) return '依恋虚空';
+            return '自我深渊';
+        }
+        if (floor === 1) return 'Workplace Fear';
+        if (floor === 2) return 'Social Judgment';
+        if (floor === 3) return 'Attachment Void';
+        return 'Self Abyss';
     }
 
     private _getTargetsInRange(): RunEnemyModel[] {
@@ -1623,13 +2500,18 @@ export class RuntimeEntry extends Component {
     }
 
     private _getLoadoutSpec(): LoadoutSpec {
-        return PROFESSION_LOADOUTS[this._selectedProfessionId] ?? PROFESSION_LOADOUTS.blade_adept;
+        return PROFESSION_LOADOUTS[this._selectedProfessionId] ?? PROFESSION_LOADOUTS.intj;
     }
 
     private _professionButtonText(professionId: ProfessionId, selected: boolean): string {
-        const label = PROFESSION_BUTTON_LABELS[professionId] ?? professionId.toUpperCase();
-        const weapon = WEAPON_SPECS[PROFESSION_LOADOUTS[professionId]?.weaponId ?? 'blade'];
-        return selected ? `[${label}]\n${weapon.shortName}` : `${label}\n${weapon.shortName}`;
+        const profession = PROFESSIONS.find((item) => item.id === professionId);
+        const code = profession?.code ?? professionId.toUpperCase();
+        const name = this._language === 'zh'
+            ? (profession?.nameZh ?? code)
+            : (profession?.name ?? code);
+        const short = name.length > 8 ? code : `${code}`;
+        const line2 = this._language === 'zh' ? (profession?.nameZh ?? '') : (profession?.name ?? '');
+        return selected ? `[${short}]\n${line2}` : `${short}\n${line2}`;
     }
 
     private _applyCard(card: HexCardData): void {
@@ -1639,6 +2521,14 @@ export class RuntimeEntry extends Component {
         const bonus: CombatBonus = card.bonus ?? {};
         const nextMaxHp = Math.max(1, player.maxHp + (bonus.maxHp ?? 0));
         const hpGain = Math.max(0, nextMaxHp - player.maxHp);
+
+        // Signature exclusive: light feedback when the matching hero picks it.
+        if (card.exclusiveTo && card.exclusiveTo === this._selectedProfessionId) {
+            const label = this._language === 'zh'
+                ? `专属 · ${card.nameZh ?? card.name}`
+                : `Signature · ${card.name}`;
+            this._log(label);
+        }
 
         this._run = {
             ...this._run,
@@ -1663,9 +2553,16 @@ export class RuntimeEntry extends Component {
                 chainHits: Math.max(0, Math.floor(player.chainHits + (bonus.chainHits ?? 0))),
                 splitBlades: Math.max(0, Math.floor(player.splitBlades + (bonus.splitBlades ?? 0))),
                 fanAngle: Math.max(0, player.fanAngle + (bonus.fanAngle ?? 0)),
+                critChance: Math.min(0.95, Math.max(0, player.critChance + (bonus.critChance ?? 0))),
+                critMultiplier: Math.max(1.5, player.critMultiplier + (bonus.critMultiplier ?? 0)),
+                lifesteal: Math.min(0.5, Math.max(0, player.lifesteal + (bonus.lifesteal ?? 0))),
+                executeBonus: Math.max(0, player.executeBonus + (bonus.executeBonus ?? 0)),
+                bossDamageBonus: Math.max(0, player.bossDamageBonus + (bonus.bossDamageBonus ?? 0)),
+                lockedSkillIds: this._rollSystem.getLockedSkillIds(),
             },
         };
-        this._log(this._fmt('picked', { card: card.name }));
+        const display = this._language === 'zh' && card.nameZh ? card.nameZh : card.name;
+        this._log(this._fmt('picked', { card: display }));
     }
 
     private _damageEnemy(enemyIndex: number, rawDamage: number): number {
@@ -1674,6 +2571,7 @@ export class RuntimeEntry extends Component {
         const enemy = this._run.wave.enemies[enemyIndex];
         if (!enemy || !enemy.alive) return 0;
 
+        // Re-scale with full passive pipeline when raw is base-ish; callers already pass resolved damage often.
         const dealt = damageAfterArmor(rawDamage, enemy.armor);
         const nextEnemy = {
             ...enemy,
@@ -1682,6 +2580,13 @@ export class RuntimeEntry extends Component {
         nextEnemy.alive = nextEnemy.hp > 0;
         this._run.wave.enemies[enemyIndex] = nextEnemy;
         this._run.stats.damageDealt += dealt;
+
+        // Lifesteal
+        if (this._run.player.lifesteal > 0 && dealt > 0) {
+            const heal = Math.max(1, Math.round(dealt * this._run.player.lifesteal));
+            this._run.player.hp = Math.min(this._run.player.maxHp, this._run.player.hp + heal);
+        }
+
         const position = this._enemyPositions.get(enemy.id);
         if (position) {
             position.hitFlashTimer = 0.14;
@@ -1689,9 +2594,26 @@ export class RuntimeEntry extends Component {
         }
         if (!nextEnemy.alive) {
             this._run.stats.kills += 1;
+            // E passive: kill stacks
+            if (professionHasTrait(this._run.profession, 'E')) {
+                this._run.player.killStacks = Math.min(15, this._run.player.killStacks + 1);
+            }
+            // F passive: every 8 kills heal 12%
+            if (professionHasTrait(this._run.profession, 'F')) {
+                this._run.player.feelKillCounter += 1;
+                if (this._run.player.feelKillCounter >= 8) {
+                    this._run.player.feelKillCounter = 0;
+                    const heal = Math.round(this._run.player.maxHp * 0.12);
+                    this._run.player.hp = Math.min(this._run.player.maxHp, this._run.player.hp + heal);
+                    this._float(`+${heal}`, this._playerX, this._playerY + 28, new Color(120, 255, 160, 255));
+                }
+            }
+            // Small energy refund on kill
+            this._run.player.energy = Math.min(MAX_ULTIMATE_ENERGY, this._run.player.energy + 4);
             if (position) {
+                const arch = ENEMY_ARCHETYPES[position.type] ?? ENEMY_ARCHETYPES.chaser;
                 position.deathTimer = 0.28;
-                this._pulse(position.x, position.y, 10, ENEMY_ARCHETYPES[position.type].radius + 28, 0.28, this._enemyColor(position.type), 3);
+                this._pulse(position.x, position.y, 10, arch.radius + 28, 0.28, this._enemyColor(position.type), 3);
             }
             this._grantKillXp(enemy);
         }
@@ -1702,7 +2624,12 @@ export class RuntimeEntry extends Component {
         if (!this._run) return;
 
         const type = enemyTypeFromConfig(enemy.configId);
-        const base = enemy.rank === 'boss' ? 38 : enemy.rank === 'elite' ? 8 : type === 'swarm' ? 2 : 4;
+        let base = enemy.rank === 'boss' ? 38 : enemy.rank === 'elite' ? 8 : type === 'swarm' || type === 'anxiety' ? 2 : 4;
+        // ENTJ elite mark ultimate: 3x XP
+        if (this._run.player.activeUltimateId === 'elite_mark') {
+            base *= 3;
+        }
+        // Infinite growth card: extra ATK% on level already handled via level-up path
         let xp = this._run.stats.xp + base;
         let level = this._run.stats.level;
         let xpToNext = this._run.stats.xpToNext;
@@ -1717,11 +2644,13 @@ export class RuntimeEntry extends Component {
 
         if (levelUps > 0) {
             const hpGain = 3 * levelUps;
+            const hasInfinite = this._run.pickedCards.some((card) => card.id === 'infinite_growth');
             this._run.player = {
                 ...this._run.player,
                 maxHp: this._run.player.maxHp + hpGain,
                 hp: Math.min(this._run.player.maxHp + hpGain, this._run.player.hp + hpGain),
                 damage: this._run.player.damage + levelUps,
+                damagePercent: this._run.player.damagePercent + (hasInfinite ? 0.05 * levelUps : 0),
                 moveSpeed: Math.min(1.85, this._run.player.moveSpeed + levelUps * 0.012),
                 attackCooldown: Math.max(0.18, this._run.player.attackCooldown - levelUps * 0.008),
             };
@@ -1771,10 +2700,14 @@ export class RuntimeEntry extends Component {
         if (!this._run || this._run.player.dodge <= 0) return false;
         if (Math.random() >= this._run.player.dodge) return false;
 
+        // N passive: after dodge, next hit +40%
+        if (professionHasTrait(this._run.profession, 'N')) {
+            this._run.player.postDodgeBonus = Math.max(this._run.player.postDodgeBonus, 0.4);
+        }
         this._float('DODGE', this._playerX, this._playerY + 22, new Color(154, 226, 255, 255));
         this._traceAttack(sourceX, sourceY, 'chain');
         this._pulse(this._playerX, this._playerY, 10, 28, 0.24, new Color(154, 226, 255, 220), 2);
-        this._log('Dodged incoming damage.');
+        this._log(this._language === 'zh' ? '闪避成功。' : 'Dodged incoming damage.');
         return true;
     }
 
@@ -1784,8 +2717,11 @@ export class RuntimeEntry extends Component {
         const minutes = Math.floor(this._run.stats.timeSeconds / 60);
         const secondsValue = Math.floor(this._run.stats.timeSeconds % 60);
         const seconds = secondsValue < 10 ? `0${secondsValue}` : `${secondsValue}`;
+        const code = this._run.profession.code;
+        const name = this._language === 'zh' ? this._run.profession.nameZh : this._run.profession.name;
         this._resultLabel.string = [
             this._t('runComplete'),
+            `${code} ${name}`,
             `Wave ${this._run.wave.wave}  Cleared ${this._run.stats.wavesCleared}`,
             `Time ${minutes}:${seconds}  Lv ${this._run.stats.level}  Kills ${this._run.stats.kills}`,
             `Damage ${this._run.stats.damageDealt}  Taken ${this._run.stats.damageTaken}`,
@@ -1829,6 +2765,17 @@ export class RuntimeEntry extends Component {
         this._pressedKeys.add(event.keyCode);
         if (event.keyCode === KeyCode.KEY_N && this._state === GameState.Battle) {
             this._debugClearWave();
+            return;
+        }
+        if (event.keyCode === KeyCode.KEY_U && this._state === GameState.Battle) {
+            this._activateUltimate();
+            return;
+        }
+        // Debug fill ultimate energy
+        if (event.keyCode === KeyCode.KEY_E && this._state === GameState.Battle && this._run) {
+            this._run.player.energy = MAX_ULTIMATE_ENERGY;
+            this._log(this._t('ultimateReady'));
+            this._renderHud();
             return;
         }
         this._syncKeyboardInput();
@@ -1888,17 +2835,28 @@ export class RuntimeEntry extends Component {
         if (this._hudLabel && this._run) {
             const weapon = this._getWeaponSpec();
             const timeLeft = Math.max(0, Math.ceil(WAVE_DURATION_SECONDS - this._run.wave.elapsedSeconds));
-            this._hudLabel.string = `${this._t('wave')} ${this._run.wave.wave}  ${timeLeft}s  ${this._t('level')} ${this._run.stats.level} ${this._run.stats.xp}/${this._run.stats.xpToNext}XP  ${this._t('hp')} ${this._run.player.hp}/${this._run.player.maxHp}  ${weapon.shortName}  ${this._t('enemies')} ${alive}`;
+            const plan = getWavePlan(this._run.wave.wave);
+            const floorTheme = getFloorTheme(plan.floor);
+            const floorName = this._language === 'zh' ? floorTheme.zh : floorTheme.en;
+            const code = this._run.profession.code;
+            const energy = Math.floor(this._run.player.energy);
+            const stacks = this._run.player.killStacks > 0 ? ` E${this._run.player.killStacks}` : '';
+            this._hudLabel.string = `${code}  F${plan.floor}:${floorName}  ${this._t('wave')} ${this._run.wave.wave} ${timeLeft}s  ${this._t('level')}${this._run.stats.level}  ${this._t('hp')} ${Math.ceil(this._run.player.hp)}/${this._run.player.maxHp}  ULT ${energy}/100  ${weapon.shortName}${stacks}  ${this._t('enemies')} ${alive}`;
         }
         if (this._enemyLabel && this._run) {
             const nearest = this._getNearestEnemySummary();
             this._enemyLabel.string = this._state === GameState.RollDraft ? this._t('draft') : nearest;
         }
         if (this._statusLabel && this._run) {
-            const perf = `FPS ${this._perfFps}  P ${this._projectiles.length}/${MOBILE_PERFORMANCE_BUDGET.maxActiveProjectiles}`;
+            const ult = this._run.player.ultimateTimer > 0
+                ? `ULT ${this._run.player.ultimateTimer.toFixed(1)}s`
+                : (this._run.player.energy >= (this._run.profession.ultimateEnergyCost || 100)
+                    ? this._t('ultimateReady')
+                    : `${this._t('shield')} ${Math.floor(this._run.player.energy)}%`);
+            const perf = `FPS ${this._perfFps}`;
             this._statusLabel.string = this._state === GameState.RollDraft
                 ? `${this._t('freeRefresh')} ${view.freeRefreshesRemaining}  ${this._t('pickUpgrade')}`
-                : `${this._t('auto')} ${this._getTargetsInRange().length > 0 ? this._t('firing') : this._t('seeking')}  ${this._getControlSlowMultiplier() < 1 ? this._t('snared') : this._t('mobile')}  ${this._t('shield')} ${this._shieldTimer > 0 ? this._shieldTimer.toFixed(1) : this._t('shieldReady')}  ${perf}`;
+                : `${this._t('auto')} ${this._getTargetsInRange().length > 0 ? this._t('firing') : this._t('seeking')}  ${ult}  ${perf}`;
         }
         if (this._logLabel) this._logLabel.string = this._lastLog;
 
@@ -1906,6 +2864,10 @@ export class RuntimeEntry extends Component {
         if (this._rerollButton) {
             this._rerollButton.node.active = this._state === GameState.RollDraft;
             this._setButtonText(this._rerollButton, view.rewardedAdRefreshPending ? this._t('watchAd') : `${this._t('refresh')} ${view.freeRefreshesRemaining}`);
+        }
+        if (this._shieldButton && this._state === GameState.Battle) {
+            const ready = (this._run?.player.energy ?? 0) >= (this._run?.profession.ultimateEnergyCost ?? 100);
+            this._setButtonText(this._shieldButton, ready ? `${this._t('shield')}!` : this._t('shield'));
         }
     }
 
@@ -1987,6 +2949,8 @@ export class RuntimeEntry extends Component {
 
         this._syncVoidChaserSprites();
         this._syncCoreTankSprites();
+        this._syncTypedEnemySprites();
+        this._syncSummonSprites();
 
         for (const trace of this._attackTraces) {
             const progress = 1 - trace.ttl / Math.max(0.001, trace.duration);
@@ -2124,7 +3088,8 @@ export class RuntimeEntry extends Component {
                 graphics.stroke();
             }
 
-            const usesRuntimeSprite = (position.type === 'chaser' && !!this._voidChaserSpriteFrame)
+            const usesRuntimeSprite = this._enemySpriteFrames.has(position.type)
+                || (position.type === 'chaser' && !!this._voidChaserSpriteFrame)
                 || (position.type === 'tank' && !!this._coreTankSpriteFrame);
             if (usesRuntimeSprite) {
                 this._drawEnemySpriteBacking(graphics, position, archetype.radius);
@@ -2166,19 +3131,20 @@ export class RuntimeEntry extends Component {
     private _syncArenaPlayerSprite(): boolean {
         const node = this._arenaPlayerSpriteNode;
         const sprite = this._arenaPlayerSprite;
-        const active = this._selectedProfessionId === 'blade_adept'
-            && this._state === GameState.Battle
+        const frame = this._heroSpriteFrames.get(this._selectedProfessionId) ?? sprite?.spriteFrame ?? null;
+        const active = this._state === GameState.Battle
             && !!this._run
-            && !!sprite?.spriteFrame;
+            && !!frame;
 
         if (!node) return false;
         node.active = active;
         if (!active) return false;
 
-        const actionProgress = this._weaponActionKind === 'blade'
+        if (sprite && frame) sprite.spriteFrame = frame;
+        const actionProgress = this._weaponActionKind !== 'none'
             ? 1 - this._weaponActionTimer / Math.max(0.001, this._weaponActionDuration)
             : 1;
-        const actionPower = this._weaponActionKind === 'blade'
+        const actionPower = this._weaponActionKind !== 'none'
             ? Math.sin(Math.min(1, Math.max(0, actionProgress)) * Math.PI)
             : 0;
         const scale = 1 + actionPower * 0.045;
@@ -2191,11 +3157,17 @@ export class RuntimeEntry extends Component {
     private _syncLoadoutPreviewSprite(): boolean {
         const node = this._loadoutPreviewSpriteNode;
         const sprite = this._loadoutPreviewSprite;
-        const active = this._selectedProfessionId === 'blade_adept' && !!sprite?.spriteFrame;
+        // Prefer bust portrait on the title loadout card; fall back to battle sprite.
+        const frame = this._portraitSpriteFrames.get(this._selectedProfessionId)
+            ?? this._heroSpriteFrames.get(this._selectedProfessionId)
+            ?? sprite?.spriteFrame
+            ?? null;
+        const active = !!frame;
 
         if (!node) return false;
         node.active = active;
         if (active) {
+            if (sprite && frame) sprite.spriteFrame = frame;
             node.setPosition(-8, -14, 0);
             node.setScale(1, 1, 1);
         }
@@ -2218,6 +3190,12 @@ export class RuntimeEntry extends Component {
     private _syncArenaMapSprite(): boolean {
         const node = this._arenaMapSpriteNode;
         const sprite = this._arenaMapSprite;
+        // Prefer floor-themed map when in a run.
+        if (sprite && this._run) {
+            const floor = Math.min(4, Math.max(1, getWavePlan(this._run.wave.wave).floor));
+            const floorFrame = this._floorMapFrames.get(floor) ?? this._floorMapFrames.get(1) ?? null;
+            if (floorFrame) sprite.spriteFrame = floorFrame;
+        }
         const active = !!sprite?.spriteFrame;
 
         if (!node) return false;
@@ -2235,6 +3213,87 @@ export class RuntimeEntry extends Component {
         });
         this._coreTankSpriteNodes.forEach((node) => {
             node.active = false;
+        });
+        this._enemySpritePools.forEach((nodes) => {
+            nodes.forEach((node) => {
+                node.active = false;
+            });
+        });
+        this._summonSpriteNodes.forEach((node) => {
+            node.active = false;
+        });
+    }
+
+    private _bossSpriteForCurrentFloor(): SpriteFrame | null {
+        if (!this._run) return this._enemySpriteFrames.get('boss') ?? null;
+        const floor = Math.min(4, Math.max(1, getWavePlan(this._run.wave.wave).floor));
+        return this._bossSpriteByFloor.get(floor)
+            ?? this._bossSpriteByFloor.get(1)
+            ?? this._enemySpriteFrames.get('boss')
+            ?? null;
+    }
+
+    private _syncTypedEnemySprites(): void {
+        if (!this._run || !this._enemySpriteLayer) return;
+
+        // Types already handled by dedicated legacy pools.
+        const skip = new Set<RuntimeEnemyType>(['chaser', 'tank']);
+        const byType = new Map<RuntimeEnemyType, EnemyPosition[]>();
+        for (const enemy of this._run.wave.enemies) {
+            if (!enemy.alive) continue;
+            const position = this._enemyPositions.get(enemy.id);
+            if (!position || skip.has(position.type)) continue;
+            const hasFrame = position.type === 'boss'
+                ? !!this._bossSpriteForCurrentFloor()
+                : this._enemySpriteFrames.has(position.type);
+            if (!hasFrame) continue;
+            const list = byType.get(position.type) ?? [];
+            list.push(position);
+            byType.set(position.type, list);
+        }
+
+        byType.forEach((positions, type) => {
+            const frame = type === 'boss'
+                ? this._bossSpriteForCurrentFloor()
+                : this._enemySpriteFrames.get(type) ?? null;
+            if (!frame) return;
+            let pool = this._enemySpritePools.get(type);
+            if (!pool) {
+                pool = [];
+                this._enemySpritePools.set(type, pool);
+            }
+            const size = type === 'boss' ? 110 : type === 'swarm' ? 42 : 72;
+            while (pool.length < positions.length) {
+                const index = pool.length;
+                const node = this._panel(`EnemySprite_${type}_${index}`, this._enemySpriteLayer!, size, size, 0, 0);
+                const sprite = node.addComponent(Sprite);
+                sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+                sprite.spriteFrame = frame;
+                node.active = false;
+                pool.push(node);
+            }
+            const elapsed = this._run!.wave.elapsedSeconds;
+            positions.forEach((position, index) => {
+                const node = pool![index];
+                const sprite = node.getComponent(Sprite);
+                const spawnScale = position.spawnTimer > 0 ? 0.8 + (1 - position.spawnTimer / 0.34) * 0.2 : 1;
+                const pulse = 1 + Math.sin(elapsed * 5 + index) * 0.02;
+                const scale = spawnScale * pulse * (type === 'boss' ? 1.15 : 1);
+                const facingScale = this._playerX < position.x ? -scale : scale;
+                const alpha = Math.round(255 * Math.max(0.25, spawnScale));
+                node.active = true;
+                node.setPosition(position.x, position.y, 0);
+                node.setScale(facingScale, scale, 1);
+                if (sprite) {
+                    sprite.spriteFrame = frame;
+                    sprite.color = position.hitFlashTimer > 0
+                        ? new Color(255, 180, 190, alpha)
+                        : new Color(255, 255, 255, alpha);
+                }
+            });
+            for (let i = positions.length; i < pool.length; i += 1) {
+                pool[i].active = false;
+            }
         });
     }
 
@@ -2740,6 +3799,17 @@ export class RuntimeEntry extends Component {
         graphics.fillColor = new Color(255, 218, 110, 230);
         graphics.roundRect(x, y - 8, width * xpRatio, 4, 2);
         graphics.fill();
+
+        // Ultimate energy bar
+        const energyRatio = Math.max(0, Math.min(1, this._run.player.energy / MAX_ULTIMATE_ENERGY));
+        graphics.fillColor = new Color(52, 62, 78, 210);
+        graphics.roundRect(x, y - 14, width, 4, 2);
+        graphics.fill();
+        graphics.fillColor = energyRatio >= 1
+            ? new Color(210, 150, 255, 245)
+            : new Color(140, 110, 220, 230);
+        graphics.roundRect(x, y - 14, width * energyRatio, 4, 2);
+        graphics.fill();
     }
 
     private _drawEnemyWarning(graphics: Graphics, position: EnemyPosition, radius: number): void {
@@ -3116,6 +4186,9 @@ export class RuntimeEntry extends Component {
     }
 
     private _enemyColor(type: RuntimeEnemyType): Color {
+        if (type === 'doubt') return new Color(160, 170, 190, 255);
+        if (type === 'anxiety') return new Color(255, 92, 110, 255);
+        if (type === 'procrastination') return new Color(120, 150, 90, 255);
         if (type === 'boss') return new Color(184, 82, 255, 255);
         if (type === 'tank') return new Color(255, 166, 82, 255);
         if (type === 'dasher') return new Color(255, 86, 126, 255);
@@ -3162,8 +4235,25 @@ export class RuntimeEntry extends Component {
             const choice = choices[i];
             const button = this._choiceButtons[i];
             button.node.active = !!choice;
+            const icon = this._choiceIconSprites[i];
             if (choice && this._choiceLabels[i]) {
-                this._choiceLabels[i].string = `${choice.data.name}\n${choice.data.rarity.toUpperCase()} / ${choice.data.category.toUpperCase()}`;
+                const name = this._language === 'zh' && choice.data.nameZh ? choice.data.nameZh : choice.data.name;
+                const rarity = choice.data.rarity.toUpperCase();
+                const lock = choice.locked || (this._rollSystem.getLockedSkillIds().indexOf(choice.data.id) >= 0) ? ' 🔒' : '';
+                this._choiceLabels[i].string = `${name}${lock}\n${rarity}`;
+                // Tint by rarity via label color
+                const hex = rarityColorHex(choice.data.rarity);
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                this._choiceLabels[i].color = new Color(r, g, b, 255);
+                const frame = this._skillIconFrames.get(choice.data.id) ?? null;
+                if (icon) {
+                    icon.node.active = !!frame;
+                    if (frame) icon.spriteFrame = frame;
+                }
+            } else if (icon) {
+                icon.node.active = false;
             }
         }
     }

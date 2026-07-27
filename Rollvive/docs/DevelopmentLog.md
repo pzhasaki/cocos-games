@@ -1052,3 +1052,93 @@ Accepted into project:
 
 - Crash Site v01 is connected to the temporary `RuntimeEntry` Arena with a procedural fallback.
 - Final visual and texture-compression acceptance is pending Cocos Creator preview.
+
+## 2026-07-27 Mind Dungeon MBTI pivot (M1 prototype)
+
+Tool / model:
+
+- Grok in local workspace.
+
+Operator:
+
+- Project owner directed work from the MBTI Roguelike pitch deck.
+
+Purpose:
+
+- Pivot Rollvive runtime toward "16 Personalities: Mind Dungeon" from the commercial pitch.
+- Deliver M1-scope playable slice: 16 MBTI personalities, 8 dimension passives, skill drafts, ultimates, Floor 1 workplace-anxiety waves.
+
+Human direction:
+
+- Read `/Users/caoyingxu/Desktop/MBTI-Roguelike-Pitch-Deck(1).pptx`.
+- Complete the game under `cocos-games/Rollvive`.
+
+Work summary:
+
+- Replaced 4 weapon-bound survivors with full 16 MBTI roster (INTJ…ESFP), each with traits, base ATK/HP/SPD, weapon style, and unique ultimate.
+- Implemented 8 dimension passives (E/I/S/N/T/F/J/P) in combat math and runtime.
+- Expanded skill pool to 48 cards across white/blue/purple/orange rarities (pitch targets 72).
+- Reworked enemies/waves toward negative-emotion entities and 4-floor abyss structure; Floor 1 boss = Workplace Fear.
+- Title UI: paged 16-personality select, bilingual MBTI info, ultimate button (energy), HUD shows type/floor/ULT.
+- Ultimate system: energy gain on attack/kill, U key / ULTIMATE button, per-type effects (time slow, chain bomb, phoenix, berserk, etc.).
+
+Files changed:
+
+- `assets/scripts/data/RollData.ts`
+- `assets/scripts/domain/RunModel.ts`
+- `assets/scripts/domain/RuntimeBattleMath.ts`
+- `assets/scripts/domain/BattleContent.ts`
+- `assets/scripts/domain/CharacterContent.ts`
+- `assets/scripts/manager/RollSystem.ts`
+- `assets/scripts/RuntimeEntry.ts`
+- `assets/scripts/core/GameCtrl.ts`
+- `tools/validate-content.js`
+- `package.json`
+- `docs/DevelopmentLog.md`
+
+Validation:
+
+- `npm run validate:content`: passed (16 MBTI, 48 skills, waves 1-10, draft sizes).
+- Domain/data modules transpile cleanly. Full `tsc` still blocked by missing Cocos `cc` engine typings in this CLI environment (expected).
+
+Accepted into project:
+
+- Yes, as M1 playable content pivot on the existing RuntimeEntry loop.
+
+Notes:
+
+- Not yet complete vs full pitch (72 skills, hero exclusive 3×3 trees, 4 full bosses with phases, meta Jung tree, MBTI quiz, TikTok share, IAA). Next priority: M2 content depth and vertical polish.
+
+
+## 2026-07-27 Mind Dungeon M1 art batch (gpt-image-2 / krill)
+
+### Goal
+Fill the missing combat sprites for the MBTI Mind Dungeon pivot using the owner-provided image API.
+
+### API note
+- `imageapi.md` listed `https://api.frill-ai.com/v1` — that host does not resolve.
+- Working host (verified 2026-07-22 and reconfirmed today): `https://api.krill-ai.com/v1`.
+- File corrected to `api.krill-ai.com`. Model `gpt-image-2`, key prefix `nb_…`.
+- Concurrent bursts return Cloudflare 403; sequential generation with curl User-Agent is stable (~30–60s/image).
+
+### Generated (25/25, 0 errors)
+- 16 MBTI heroes → `assets/resources/characters/{intj…esfp}.png` (512×512 RGBA)
+- 8 emotion enemies/boss:
+  - anxiety_spike, doubt_orb, delay_snail, anger_lance
+  - comparison_shade, doubt_swarm, bind_shell, workplace_fear (768×768)
+- 1 arena map → `assets/resources/environment/mind_abyss_arena.png`
+
+### Pipeline
+- Batch script: `output/imagegen/m1_mind_dungeon/batch_generate_m1.py`
+- Chroma `#00ff00` → transparent via `remove_chroma_key.py`
+- Install: `output/imagegen/m1_mind_dungeon/install_assets.py`
+- Contact sheet: `output/imagegen/m1_mind_dungeon/m1-contact-sheet.png`
+
+### Runtime wiring
+- `RuntimeEntry._loadRuntimeAssets` loads all 16 hero sprites + emotion enemy set + mind abyss map (falls back to crash site / void_chaser / core_tank).
+- Player sprite now shows for every profession (not only blade).
+- Enemy sprite pools extended beyond chaser/tank.
+
+### Still deferred vs full pitch
+- Hero exclusive 3×3 skill trees art, remaining boss floors 2–4, meta Jung tree UI, TikTok share cards, portrait layout polish.
+- Cocos Editor reimport required so `.meta` trim/spriteFrame subMetas are fully populated.
