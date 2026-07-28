@@ -16,6 +16,7 @@ import {
     SpriteFrame,
     UITransform,
     Vec2,
+    view,
 } from 'cc';
 import { GameState } from './domain/GameState';
 import { createEnemy, createInitialRun, createWaveRuntime, RunEnemyModel, RunModel } from './domain/RunModel';
@@ -382,6 +383,15 @@ export class RuntimeEntry extends Component {
     private readonly _dimIconFrames = new Map<MbtiTrait, SpriteFrame>();
     /** Weapon style icons blade/spear/gun/orb. */
     private readonly _weaponIconFrames = new Map<WeaponStyleId, SpriteFrame>();
+    /** Attack multi-frame overlays: weapon -> sparse [f0..f3]. */
+    private readonly _weaponAnimFrames = new Map<WeaponStyleId, Array<SpriteFrame | null>>();
+    private _weaponAnimSpriteNode: Node | null = null;
+    private _weaponAnimSprite: Sprite | null = null;
+    private _weaponAnimPlaying = false;
+    private _weaponAnimWeapon: WeaponStyleId | null = null;
+    private _weaponAnimElapsed = 0;
+    private _weaponAnimDuration = 0.28;
+    private static readonly WEAPON_ANIM_FRAME_COUNT = 4;
     /** Misc UI chrome (heart, coin, energy, rarity frames, etc.). */
     private readonly _uiIconFrames = new Map<string, SpriteFrame>();
     /** VFX keyframes (slash, explosion, heal_ring, hit_spark, ...). */
@@ -464,6 +474,9 @@ export class RuntimeEntry extends Component {
     private _keyboardInput = new Vec2(0, 0);
     private readonly _pressedKeys = new Set<KeyCode>();
     private _joystickTouchId: number | null = null;
+    /** Screen-space origin of the active virtual stick (UI coords). */
+    private _joystickOriginX = 0;
+    private _joystickOriginY = 0;
     private _attackTimer = 0;
     private _shieldTimer = 0;
     private _weaponActionTimer = 0;
@@ -477,15 +490,23 @@ export class RuntimeEntry extends Component {
     private _spawnSerial = 0;
 
     protected onLoad(): void {
+        this._disableLegacyOverlayUi();
         this._build();
         input.on(Input.EventType.KEY_DOWN, this._onKeyDown, this);
         input.on(Input.EventType.KEY_UP, this._onKeyUp, this);
+        // Global touch stick — node-local joystick alone is easy to miss / block in browser preview.
+        input.on(Input.EventType.TOUCH_START, this._onScreenTouchStart, this);
+        input.on(Input.EventType.TOUCH_MOVE, this._onScreenTouchMove, this);
+        input.on(Input.EventType.TOUCH_END, this._onScreenTouchEnd, this);
+        input.on(Input.EventType.TOUCH_CANCEL, this._onScreenTouchEnd, this);
         this._enterState(GameState.Title);
     }
 
     protected update(dt: number): void {
         const cappedDt = Math.min(dt, 0.05);
         if (this._state === GameState.Battle && this._run) {
+            // Re-sync keys each frame so browser focus hiccups don't leave stale zeros.
+            this._syncKeyboardInput();
             this._tickBattle(cappedDt);
             this._drawArena();
             this._drawJoystick();
@@ -517,6 +538,32 @@ export class RuntimeEntry extends Component {
         this._joystickBase?.off(Node.EventType.TOUCH_CANCEL, this._onJoystickEnd, this);
         input.off(Input.EventType.KEY_DOWN, this._onKeyDown, this);
         input.off(Input.EventType.KEY_UP, this._onKeyUp, this);
+        input.off(Input.EventType.TOUCH_START, this._onScreenTouchStart, this);
+        input.off(Input.EventType.TOUCH_MOVE, this._onScreenTouchMove, this);
+        input.off(Input.EventType.TOUCH_END, this._onScreenTouchEnd, this);
+        input.off(Input.EventType.TOUCH_CANCEL, this._onScreenTouchEnd, this);
+    }
+
+    /** Legacy UIManager builds a parallel Start/Battle HUD that can sit on Canvas and steal input. */
+    private _disableLegacyOverlayUi(): void {
+        const parent = this.node;
+        const killNames = ['StartPanel', 'BattleHUD', 'RollPanel', 'ResultPanel', 'PausePanel', 'SensitivityPanel'];
+        for (const child of [...parent.children]) {
+            if (killNames.indexOf(child.name) >= 0) {
+                child.active = false;
+            }
+        }
+        // Also hide if UIManager parented panels to the scene root.
+        const scene = parent.parent;
+        if (scene) {
+            for (const child of [...scene.children]) {
+                if (killNames.indexOf(child.name) >= 0) {
+                    child.active = false;
+                }
+            }
+        }
+        const legacy = parent.getComponent('UIManager') as { enabled?: boolean } | null;
+        if (legacy) legacy.enabled = false;
     }
 
     private _build(): void {
@@ -524,33 +571,73 @@ export class RuntimeEntry extends Component {
 
         this._menu = this._panel('MenuScreen', this._root, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0);
         this._block('MenuBg', this._menu, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, new Color(10, 14, 24, 255));
-        this._label('Title', this._menu, 'Mind Dungeon', 42, -200, 208, new Color(246, 249, 255, 255));
-        this._label('Subtitle', this._menu, this._t('subtitle'), 14, -168, 172, new Color(170, 190, 218, 255));
-        this._label('LanguageHint', this._menu, this._t('language'), 13, 294, 206, new Color(132, 164, 202, 255));
+
+        // ── Title header (left) + language (top-right) ──────────────────────
+        // Layout target: 960×540, origin center. Left column = roster, right = portrait.
+        const titleLabel = this._label('Title', this._menu, 'Mind Dungeon', 40, -210, 222, new Color(246, 249, 255, 255));
+        titleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+        titleLabel.node.getComponent(UITransform)?.setContentSize(420, 52);
+        const subtitleLabel = this._label('Subtitle', this._menu, this._t('subtitle'), 13, -210, 186, new Color(170, 190, 218, 255));
+        subtitleLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+        subtitleLabel.node.getComponent(UITransform)?.setContentSize(420, 28);
+
+        const langHint = this._label('LanguageHint', this._menu, this._t('language'), 12, 348, 228, new Color(132, 164, 202, 255));
+        langHint.horizontalAlign = Label.HorizontalAlign.CENTER;
+        langHint.node.getComponent(UITransform)?.setContentSize(160, 22);
         const languages: RuntimeLanguage[] = ['en', 'zh'];
         languages.forEach((language, index) => {
-            const button = this._button(`Language${language}`, this._menu!, language === 'en' ? 'EN' : '中文', 78, 38, 302 + index * 88, 170);
+            const button = this._button(
+                `Language${language}`,
+                this._menu!,
+                language === 'en' ? 'EN' : '中文',
+                72,
+                34,
+                300 + index * 82,
+                192,
+            );
             const handler = () => this._pickLanguage(language);
             button.node.on(Button.EventType.CLICK, handler, this);
             this._languageButtons.push(button);
             this._languageHandlers.push(handler);
         });
-        this._label('ProfessionHint', this._menu, this._t('loadouts'), 13, -318, 128, new Color(132, 164, 202, 255));
 
-        // 16 personalities in 2 pages of 8 (2×4 grid each).
+        // ── Left: section header + page switch ─────────────────────────────
+        const profHint = this._label('ProfessionHint', this._menu, this._t('loadouts'), 13, -300, 148, new Color(132, 164, 202, 255));
+        profHint.horizontalAlign = Label.HorizontalAlign.LEFT;
+        profHint.node.getComponent(UITransform)?.setContentSize(200, 24);
+        this._pageButton = this._button('PageButton', this._menu, 'NT/NF →', 118, 32, -70, 148);
+        this._pageButton.node.on(Button.EventType.CLICK, this._cycleTitlePage, this);
+        const pageLabel = this._pageButton.node.children.find((c) => c.getComponent(Label))?.getComponent(Label);
+        if (pageLabel) {
+            pageLabel.fontSize = 12;
+            pageLabel.lineHeight = 14;
+        }
+
+        // ── Left: 4×2 MBTI grid (page of 8) ────────────────────────────────
         const pageSize = 8;
+        const profBtnW = 118;
+        const profBtnH = 54;
+        const profGapX = 10;
+        const profGapY = 10;
+        const profOriginX = -346;
+        const profOriginY = 100;
         for (let i = 0; i < pageSize; i += 1) {
             const col = i % 4;
             const row = Math.floor(i / 4);
-            const x = -300 + col * 118;
-            const y = 78 - row * 62;
-            const button = this._button(`Profession${i}`, this._menu!, '—', 108, 52, x, y);
+            const x = profOriginX + col * (profBtnW + profGapX);
+            const y = profOriginY - row * (profBtnH + profGapY);
+            const button = this._button(`Profession${i}`, this._menu!, '—', profBtnW, profBtnH, x, y);
             const label = button.node.getChildByName(`Profession${i}Label`)?.getComponent(Label);
             if (label) {
-                label.fontSize = 12;
-                label.lineHeight = 15;
+                label.fontSize = 11;
+                label.lineHeight = 14;
+                label.horizontalAlign = Label.HorizontalAlign.CENTER;
+                label.verticalAlign = Label.VerticalAlign.CENTER;
+                label.overflow = Label.Overflow.SHRINK;
+                label.enableWrapText = true;
+                label.node.getComponent(UITransform)?.setContentSize(profBtnW - 12, profBtnH - 10);
             }
-            const frameNode = this._panel(`Profession${i}Frame`, button.node, 108, 52, 0, 0);
+            const frameNode = this._panel(`Profession${i}Frame`, button.node, profBtnW, profBtnH, 0, 0);
             const frameSprite = frameNode.addComponent(Sprite);
             frameSprite.sizeMode = Sprite.SizeMode.CUSTOM;
             frameNode.setSiblingIndex(0);
@@ -563,28 +650,39 @@ export class RuntimeEntry extends Component {
             this._professionHandlers.push(handler);
         }
 
-        this._pageButton = this._button('PageButton', this._menu, 'NT/NF →', 100, 36, -60, 128);
-        this._pageButton.node.on(Button.EventType.CLICK, this._cycleTitlePage, this);
-
-        const previewNode = this._panel('LoadoutPreview', this._menu, 278, 266, 292, 0);
+        // ── Right: portrait card ───────────────────────────────────────────
+        const previewW = 300;
+        const previewH = 320;
+        const previewX = 292;
+        const previewY = 8;
+        const previewNode = this._panel('LoadoutPreview', this._menu, previewW, previewH, previewX, previewY);
         this._loadoutPreviewGraphics = previewNode.addComponent(Graphics);
-        this._loadoutPreviewSpriteNode = this._panel('LoadoutPreviewSprite', previewNode, 212, 212, -8, -14);
+        this._loadoutPreviewSpriteNode = this._panel('LoadoutPreviewSprite', previewNode, 248, 248, 0, 8);
         this._loadoutPreviewSprite = this._loadoutPreviewSpriteNode.addComponent(Sprite);
         this._loadoutPreviewSprite.sizeMode = Sprite.SizeMode.CUSTOM;
         this._loadoutPreviewSpriteNode.active = false;
-        // Bound weapon style icon on loadout card.
-        const weaponIconNode = this._panel('WeaponPreviewIcon', previewNode, 48, 48, 100, -100);
+        // Bound weapon style icon bottom-right of portrait card.
+        const weaponIconNode = this._panel('WeaponPreviewIcon', previewNode, 44, 44, 110, -128);
         this._weaponPreviewSprite = weaponIconNode.addComponent(Sprite);
         this._weaponPreviewSprite.sizeMode = Sprite.SizeMode.CUSTOM;
         weaponIconNode.active = false;
 
-        this._menuInfoLabel = this._label('MenuInfo', this._menu, '', 13, -200, -48, new Color(210, 224, 248, 255));
+        // ── Left bottom: selected loadout stats ────────────────────────────
+        this._menuInfoLabel = this._label('MenuInfo', this._menu, '', 12, -210, -55, new Color(210, 224, 248, 255));
         if (this._menuInfoLabel) {
             this._menuInfoLabel.overflow = Label.Overflow.RESIZE_HEIGHT;
+            this._menuInfoLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+            this._menuInfoLabel.verticalAlign = Label.VerticalAlign.TOP;
+            this._menuInfoLabel.lineHeight = 18;
             const transform = this._menuInfoLabel.node.getComponent(UITransform);
-            if (transform) transform.setContentSize(360, 90);
+            if (transform) {
+                transform.setContentSize(500, 110);
+                transform.setAnchorPoint(0.5, 1);
+            }
         }
-        this._startButton = this._button('StartButton', this._menu, this._t('start'), 190, 48, -200, -168);
+
+        // ── Bottom CTA ─────────────────────────────────────────────────────
+        this._startButton = this._button('StartButton', this._menu, this._t('start'), 220, 50, -210, -200);
         this._startButton.node.on(Button.EventType.CLICK, this._startRun, this);
         this._refreshLoadoutButtons();
 
@@ -606,10 +704,18 @@ export class RuntimeEntry extends Component {
         this._arenaPlayerSprite = this._arenaPlayerSpriteNode.addComponent(Sprite);
         this._arenaPlayerSprite.sizeMode = Sprite.SizeMode.CUSTOM;
         this._arenaPlayerSpriteNode.active = false;
+        // Weapon attack multi-frame overlay (sits above player sprite).
+        this._weaponAnimSpriteNode = this._panel('WeaponAnimOverlay', arenaNode, 96, 96, 0, 0);
+        this._weaponAnimSprite = this._weaponAnimSpriteNode.addComponent(Sprite);
+        this._weaponAnimSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        this._weaponAnimSpriteNode.active = false;
         this._damageTextLayer = this._panel('DamageTextLayer', arenaNode, ARENA_WIDTH, ARENA_HEIGHT, 0, 0);
 
-        this._statusLabel = this._label('Status', this._game, '', 13, 0, -166, new Color(255, 220, 130, 255));
-        this._logLabel = this._label('Prompt', this._game, '', 12, 0, -190, new Color(190, 205, 230, 255));
+        this._statusLabel = this._label('Status', this._game, '', 13, 40, -166, new Color(255, 220, 130, 255));
+        this._logLabel = this._label('Prompt', this._game, '', 12, 40, -190, new Color(190, 205, 230, 255));
+        // Narrow hit boxes so bottom text never eats left-side movement input.
+        this._statusLabel.node.getComponent(UITransform)?.setContentSize(520, 28);
+        this._logLabel.node.getComponent(UITransform)?.setContentSize(520, 26);
         const resultBannerNode = this._panel('ResultBanner', this._game, 420, 160, 0, 36);
         this._resultBannerSprite = resultBannerNode.addComponent(Sprite);
         this._resultBannerSprite.sizeMode = Sprite.SizeMode.CUSTOM;
@@ -617,14 +723,12 @@ export class RuntimeEntry extends Component {
         this._resultLabel = this._label('ResultSummary', this._game, '', 20, 0, 36, new Color(245, 250, 255, 255));
         if (this._resultLabel) this._resultLabel.node.active = false;
 
-        this._joystickBase = this._panel('JoystickBase', this._game, 118, 118, -372, -184);
+        // Visual-only stick; actual drag is handled by global input (left half of screen).
+        this._joystickBase = this._panel('JoystickBase', this._game, 140, 140, -360, -188);
         this._joystickBaseGraphics = this._joystickBase.addComponent(Graphics);
-        this._joystickBase.on(Node.EventType.TOUCH_START, this._onJoystickStart, this);
-        this._joystickBase.on(Node.EventType.TOUCH_MOVE, this._onJoystickMove, this);
-        this._joystickBase.on(Node.EventType.TOUCH_END, this._onJoystickEnd, this);
-        this._joystickBase.on(Node.EventType.TOUCH_CANCEL, this._onJoystickEnd, this);
-        this._joystickKnob = this._panel('JoystickKnob', this._joystickBase, 52, 52, 0, 0);
+        this._joystickKnob = this._panel('JoystickKnob', this._joystickBase, 56, 56, 0, 0);
         this._joystickKnobGraphics = this._joystickKnob.addComponent(Graphics);
+        this._drawJoystick();
 
         this._shieldButton = this._button('ShieldButton', this._game, this._t('shield'), 132, 48, 246, -198);
         this._shieldButton.node.on(Button.EventType.CLICK, this._onPrimaryAction, this);
@@ -640,10 +744,12 @@ export class RuntimeEntry extends Component {
         this._rerollIconSprite.sizeMode = Sprite.SizeMode.CUSTOM;
         rerollIconNode.active = false;
 
-        // Title ornament (behind logo area on title screen).
-        const ornamentNode = this._panel('TitleOrnament', this._title, 220, 220, 0, 40);
+        // Title ornament — sits behind the right portrait card, not center (avoids covering grid).
+        // Parent must be menu — there is no `_title` node field (M6 regression crash).
+        const ornamentNode = this._panel('TitleOrnament', this._menu!, 260, 260, 292, 20);
         this._titleOrnamentSprite = ornamentNode.addComponent(Sprite);
         this._titleOrnamentSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        ornamentNode.setSiblingIndex(1); // above MenuBg, below title labels/buttons
         ornamentNode.active = false;
         // Wave-clear badge (shown briefly via status; kept as reusable node).
         const waveClearNode = this._panel('WaveClearBadge', this._game, 96, 96, 0, 40);
@@ -867,6 +973,21 @@ export class RuntimeEntry extends Component {
             });
         }
 
+        // Weapon attack multi-frame overlays (M7): anim/{blade,spear,gun,orb}/f0..f3.
+        for (const weapon of weapons) {
+            const slots: Array<SpriteFrame | null> = [null, null, null, null];
+            this._weaponAnimFrames.set(weapon, slots);
+            for (let frame = 0; frame < RuntimeEntry.WEAPON_ANIM_FRAME_COUNT; frame += 1) {
+                const frameIndex = frame;
+                resources.load(`anim/${weapon}/f${frame}/spriteFrame`, SpriteFrame, (error, spriteFrame) => {
+                    if (error || !spriteFrame || !this.node.isValid) return;
+                    const list = this._weaponAnimFrames.get(weapon);
+                    if (!list) return;
+                    list[frameIndex] = spriteFrame;
+                });
+            }
+        }
+
         // UI chrome + VFX keyframes (M4 base + M6 polish; safe if missing).
         const uiKeys = [
             'rarity_white', 'rarity_blue', 'rarity_purple', 'rarity_orange',
@@ -904,7 +1025,7 @@ export class RuntimeEntry extends Component {
         if (key === 'title_bg_ornament' && this._titleOrnamentSprite) {
             this._titleOrnamentSprite.spriteFrame = frame;
             this._titleOrnamentSprite.node.active = this._state === GameState.Title;
-            this._titleOrnamentSprite.node.getComponent(UITransform)?.setContentSize(220, 220);
+            this._titleOrnamentSprite.node.getComponent(UITransform)?.setContentSize(260, 260);
         }
         if (key === 'wave_clear' && this._waveClearBadgeSprite) {
             this._waveClearBadgeSprite.spriteFrame = frame;
@@ -929,16 +1050,19 @@ export class RuntimeEntry extends Component {
             if (!sprite) sprite = this._joystickBase.addComponent(Sprite);
             sprite.sizeMode = Sprite.SizeMode.CUSTOM;
             sprite.spriteFrame = frame;
-            this._joystickBase.getComponent(UITransform)?.setContentSize(118, 118);
-            if (this._joystickBaseGraphics) this._joystickBaseGraphics.enabled = false;
+            sprite.color = new Color(255, 255, 255, 200);
+            this._joystickBase.getComponent(UITransform)?.setContentSize(140, 140);
+            // Keep Graphics as fallback ring under the skin (semi-visible if frame is dark).
+            if (this._joystickBaseGraphics) this._joystickBaseGraphics.enabled = true;
         }
         if (key === 'joystick_knob' && this._joystickKnob) {
             let sprite = this._joystickKnob.getComponent(Sprite);
             if (!sprite) sprite = this._joystickKnob.addComponent(Sprite);
             sprite.sizeMode = Sprite.SizeMode.CUSTOM;
             sprite.spriteFrame = frame;
-            this._joystickKnob.getComponent(UITransform)?.setContentSize(52, 52);
-            if (this._joystickKnobGraphics) this._joystickKnobGraphics.enabled = false;
+            sprite.color = new Color(255, 255, 255, 230);
+            this._joystickKnob.getComponent(UITransform)?.setContentSize(56, 56);
+            if (this._joystickKnobGraphics) this._joystickKnobGraphics.enabled = true;
         }
         if (key === 'hp_bar_frame' && this._hpBarFrameSprite) {
             this._hpBarFrameSprite.spriteFrame = frame;
@@ -956,7 +1080,7 @@ export class RuntimeEntry extends Component {
             this._energyBarFillSprite.node.getComponent(UITransform)?.setContentSize(this._statusBarWidth, 6);
         }
         if (key === 'btn_primary' && this._startButton) {
-            this._applyButtonSkin(this._startButton, frame, 190, 48);
+            this._applyButtonSkin(this._startButton, frame, 220, 50);
         }
         if (key === 'btn_danger' && this._shieldButton) {
             this._applyButtonSkin(this._shieldButton, frame, 132, 48);
@@ -969,7 +1093,7 @@ export class RuntimeEntry extends Component {
         if (key === 'prof_frame') {
             for (const sprite of this._professionFrameSprites) {
                 sprite.spriteFrame = frame;
-                sprite.node.getComponent(UITransform)?.setContentSize(108, 52);
+                sprite.node.getComponent(UITransform)?.setContentSize(118, 54);
                 sprite.node.active = this._state === GameState.Title;
             }
         }
@@ -979,15 +1103,16 @@ export class RuntimeEntry extends Component {
             if (preview) {
                 let plate = preview.getChildByName('PanelDark');
                 if (!plate) {
-                    plate = this._panel('PanelDark', preview, 278, 266, 0, 0);
+                    plate = this._panel('PanelDark', preview, 300, 320, 0, 0);
                     plate.setSiblingIndex(0);
                     const sprite = plate.addComponent(Sprite);
                     sprite.sizeMode = Sprite.SizeMode.CUSTOM;
                     sprite.spriteFrame = frame;
-                    plate.getComponent(UITransform)?.setContentSize(278, 266);
+                    plate.getComponent(UITransform)?.setContentSize(300, 320);
                 } else {
                     const sprite = plate.getComponent(Sprite);
                     if (sprite) sprite.spriteFrame = frame;
+                    plate.getComponent(UITransform)?.setContentSize(300, 320);
                 }
             }
         }
@@ -1241,10 +1366,12 @@ export class RuntimeEntry extends Component {
                 return this._language === 'zh' ? `${t}:${passive.nameZh}` : `${t}:${passive.name}`;
             }).join(' · ');
             if (this._menuInfoLabel) {
+                // Keep lines short so the left column stays readable under the grid.
+                const ultLine = ultDesc.length > 42 ? `${ultDesc.slice(0, 40)}…` : ultDesc;
                 this._menuInfoLabel.string = [
-                    `${profession.code} ${name} · ${style}`,
-                    `ATK ${profession.baseAtk}  HP ${profession.baseHp}  SPD ${profession.baseSpd}  ${weapon.shortName}`,
-                    `ULT ${ult}: ${ultDesc}`,
+                    `${profession.code}  ${name}  ·  ${style}`,
+                    `ATK ${profession.baseAtk}   HP ${profession.baseHp}   SPD ${profession.baseSpd}   ${weapon.shortName}`,
+                    `ULT  ${ult}：${ultLine}`,
                     traits,
                 ].join('\n');
             }
@@ -1312,6 +1439,7 @@ export class RuntimeEntry extends Component {
         this._shieldTimer = 0;
         this._weaponActionTimer = 0;
         this._weaponActionKind = 'none';
+        this._stopWeaponAnim();
         this._spawnTimer = Math.min(1.2, this._getWaveSpawnInterval());
         this._spawnSerial = 0;
         this._clearFloatingTexts();
@@ -1349,6 +1477,7 @@ export class RuntimeEntry extends Component {
         this._tickWaveClearBadge(dt);
         this._weaponActionTimer = Math.max(0, this._weaponActionTimer - dt);
         if (this._weaponActionTimer <= 0) this._weaponActionKind = 'none';
+        this._tickWeaponAnim(dt);
 
         if (this._run.player.hp <= 0) {
             this._endRun();
@@ -1967,7 +2096,7 @@ export class RuntimeEntry extends Component {
         }
 
         this._spawnPlayerProjectile(targets[0], Math.max(1, Math.round(damage * 0.9)), weapon, 0, 0, isCritical);
-        this._triggerWeaponAction('orb', 0.28);
+        this._triggerWeaponAction('orb', 0.36);
         this._log(this._fmt('orbShot', { weapon: weapon.shortName }));
     }
 
@@ -2008,7 +2137,7 @@ export class RuntimeEntry extends Component {
             }
         });
 
-        this._triggerWeaponAction('blade', 0.22);
+        this._triggerWeaponAction('blade', 0.28);
         this._traceMeleeArc(range, Math.PI, weapon.color);
         const orbitHits = this._resolveOrbitBladeHits(Math.max(1, Math.round(damage * 0.42)));
         this._log(this._fmt('bladeSwing', { weapon: weapon.shortName, hits: targets.length + orbitHits, kills }));
@@ -2053,7 +2182,7 @@ export class RuntimeEntry extends Component {
             }
         });
 
-        this._triggerWeaponAction('spear', 0.26);
+        this._triggerWeaponAction('spear', 0.32);
         this._traceMeleeArc(range, coneAngle, weapon.color);
         this._traceShotgunPellets(range, coneAngle, weapon.color);
         this._log(this._fmt('spearThrust', { weapon: weapon.shortName, hits: targets.length, kills }));
@@ -2070,13 +2199,131 @@ export class RuntimeEntry extends Component {
             const spread = pelletCount > 2 ? (i - (pelletCount - 1) / 2) * 0.035 : 0;
             this._spawnPlayerProjectile(target, damage, weapon, side * 9, spread, isCritical && i === 0);
         }
-        this._triggerWeaponAction('gun', 0.16);
+        this._triggerWeaponAction('gun', 0.24);
     }
 
     private _triggerWeaponAction(kind: WeaponActionKind, duration: number): void {
         this._weaponActionKind = kind;
         this._weaponActionDuration = Math.max(0.001, duration);
         this._weaponActionTimer = this._weaponActionDuration;
+        if (kind !== 'none') {
+            this._startWeaponAnim(kind, duration);
+        }
+    }
+
+    /**
+     * Attack overlay presentation. m7 frames are full weapon product shots — treat them as
+     * short-lived FX chips (muzzle flash / slash arc), not life-size floating props.
+     */
+    private static readonly WEAPON_ANIM_FX: Record<WeaponStyleId, {
+        /** Display size in arena px (player body is ~76). */
+        size: number;
+        /** Forward offset from player center along facing. */
+        offset: number;
+        yLift: number;
+        /** Prefer impact/VFX frames; skip idle product poses when possible. */
+        frameOrder: number[];
+        maxAlpha: number;
+        pulseAmp: number;
+        durationScale: number;
+    }> = {
+        // Gun f1 is dual muzzle flash — best as small FX. Avoid huge f0 product gun.
+        gun: { size: 42, offset: 34, yLift: 2, frameOrder: [1, 2, 1], maxAlpha: 210, pulseAmp: 0.06, durationScale: 0.85 },
+        // Blade f1 crescent slash reads as trail; keep modest over the swing.
+        blade: { size: 68, offset: 26, yLift: 6, frameOrder: [1, 2, 0], maxAlpha: 220, pulseAmp: 0.08, durationScale: 1.0 },
+        spear: { size: 56, offset: 38, yLift: 2, frameOrder: [1, 2, 0], maxAlpha: 200, pulseAmp: 0.06, durationScale: 0.95 },
+        orb: { size: 46, offset: 6, yLift: 16, frameOrder: [1, 2, 0, 3], maxAlpha: 190, pulseAmp: 0.12, durationScale: 1.05 },
+    };
+
+    private _startWeaponAnim(weapon: WeaponStyleId, duration: number): void {
+        const frames = this._weaponAnimFrames.get(weapon);
+        if (!frames || !frames.some((f) => !!f)) return;
+        const style = RuntimeEntry.WEAPON_ANIM_FX[weapon];
+        this._weaponAnimPlaying = true;
+        this._weaponAnimWeapon = weapon;
+        this._weaponAnimElapsed = 0;
+        // Snappy FX burst — do not linger as a floating prop.
+        this._weaponAnimDuration = Math.max(0.14, duration * style.durationScale);
+        this._applyWeaponAnimFrame(0);
+
+        // Extra soft muzzle / impact spark so attacks still read if frames are product-like.
+        const facingLen = Math.max(0.001, Math.hypot(this._facingX, this._facingY));
+        const mx = this._playerX + (this._facingX / facingLen) * style.offset;
+        const my = this._playerY + (this._facingY / facingLen) * style.offset + style.yLift;
+        if (weapon === 'gun') {
+            this._spawnVfxSprite('hit_spark', mx, my, 28, 0.16);
+        } else if (weapon === 'blade') {
+            this._spawnVfxSprite('slash', mx, my, 48, 0.2);
+        } else if (weapon === 'spear') {
+            this._spawnVfxSprite('hit_spark', mx, my, 32, 0.18);
+        } else if (weapon === 'orb') {
+            this._spawnVfxSprite('pickup_glow', mx, my, 36, 0.22);
+        }
+    }
+
+    private _stopWeaponAnim(): void {
+        this._weaponAnimPlaying = false;
+        this._weaponAnimWeapon = null;
+        this._weaponAnimElapsed = 0;
+        if (this._weaponAnimSpriteNode) this._weaponAnimSpriteNode.active = false;
+    }
+
+    private _tickWeaponAnim(dt: number): void {
+        if (!this._weaponAnimPlaying || !this._weaponAnimWeapon) return;
+        this._weaponAnimElapsed += dt;
+        if (this._weaponAnimElapsed >= this._weaponAnimDuration) {
+            this._stopWeaponAnim();
+            return;
+        }
+        const progress = this._weaponAnimElapsed / Math.max(0.001, this._weaponAnimDuration);
+        const order = RuntimeEntry.WEAPON_ANIM_FX[this._weaponAnimWeapon].frameOrder;
+        const slot = Math.min(order.length - 1, Math.floor(progress * order.length));
+        this._applyWeaponAnimFrame(order[slot] ?? 1);
+    }
+
+    private _applyWeaponAnimFrame(frameIndex: number): void {
+        if (!this._weaponAnimSpriteNode || !this._weaponAnimSprite || !this._weaponAnimWeapon) return;
+        const frames = this._weaponAnimFrames.get(this._weaponAnimWeapon);
+        // Prefer requested frame; fall back to any impact-ish frame (skip empty slots).
+        const frame = frames?.[frameIndex]
+            ?? frames?.[1]
+            ?? frames?.[2]
+            ?? frames?.find((f) => !!f)
+            ?? null;
+        if (!frame) {
+            this._weaponAnimSpriteNode.active = false;
+            return;
+        }
+        this._weaponAnimSprite.spriteFrame = frame;
+        this._weaponAnimSpriteNode.active = this._state === GameState.Battle;
+        this._syncWeaponAnimTransform();
+    }
+
+    private _syncWeaponAnimTransform(): void {
+        if (!this._weaponAnimSpriteNode || !this._weaponAnimPlaying || !this._weaponAnimWeapon) return;
+        const style = RuntimeEntry.WEAPON_ANIM_FX[this._weaponAnimWeapon];
+        const facingLen = Math.max(0.001, Math.hypot(this._facingX, this._facingY));
+        const fx = this._facingX / facingLen;
+        const fy = this._facingY / facingLen;
+        // Place at muzzle / swing tip — not on top of the hero body.
+        const x = this._playerX + fx * style.offset;
+        const y = this._playerY + fy * style.offset + style.yLift;
+        const progress = this._weaponAnimElapsed / Math.max(0.001, this._weaponAnimDuration);
+        // Soft in-out: small grow then fade (no huge scale punch).
+        const envelope = Math.sin(Math.min(1, progress) * Math.PI);
+        const pulse = 1 + envelope * style.pulseAmp;
+        const size = style.size * pulse;
+        const faceLeft = fx < -0.08;
+        this._weaponAnimSpriteNode.setPosition(x, y, 0);
+        this._weaponAnimSpriteNode.setScale(faceLeft ? -1 : 1, 1, 1);
+        this._weaponAnimSpriteNode.getComponent(UITransform)?.setContentSize(size, size);
+        if (this._weaponAnimSprite) {
+            // Fast fade after peak so product-gun frames never linger.
+            const fade = progress < 0.55
+                ? style.maxAlpha
+                : Math.round(style.maxAlpha * Math.max(0, 1 - (progress - 0.55) / 0.45));
+            this._weaponAnimSprite.color = new Color(255, 255, 255, Math.max(0, fade));
+        }
     }
 
     private _facePoint(x: number, y: number): void {
@@ -2811,12 +3058,9 @@ export class RuntimeEntry extends Component {
     private _professionButtonText(professionId: ProfessionId, selected: boolean): string {
         const profession = PROFESSIONS.find((item) => item.id === professionId);
         const code = profession?.code ?? professionId.toUpperCase();
-        const name = this._language === 'zh'
-            ? (profession?.nameZh ?? code)
-            : (profession?.name ?? code);
-        const short = name.length > 8 ? code : `${code}`;
         const line2 = this._language === 'zh' ? (profession?.nameZh ?? '') : (profession?.name ?? '');
-        return selected ? `[${short}]\n${line2}` : `${short}\n${line2}`;
+        // Two-line chip: code on top, localized name below. Selected gets brackets on code only.
+        return selected ? `[${code}]\n${line2}` : `${code}\n${line2}`;
     }
 
     private _applyCard(card: HexCardData): void {
@@ -3045,36 +3289,63 @@ export class RuntimeEntry extends Component {
         ].join('\n');
     }
 
-    private _onJoystickStart(event: EventTouch): void {
+    private _onJoystickStart(_event: EventTouch): void {
+        // Node-local stick kept for compatibility; movement uses global screen stick.
+    }
+
+    private _onJoystickMove(_event: EventTouch): void {
+        // no-op — see _onScreenTouch*
+    }
+
+    private _onJoystickEnd(_event: EventTouch): void {
+        // no-op — see _onScreenTouch*
+    }
+
+    private _onScreenTouchStart(event: EventTouch): void {
         if (this._state !== GameState.Battle) return;
+        if (this._joystickTouchId !== null) return;
+
+        const ui = event.getUILocation();
+        // Only claim left ~60% so ULT / draft buttons on the right still work.
+        const visible = view.getVisibleSize();
+        if (ui.x > visible.width * 0.62) return;
 
         this._joystickTouchId = event.getID();
-        this._updateJoystickFromTouch(event);
+        // Floating stick: origin = finger down. Avoids Canvas scale / worldPos mismatch.
+        this._joystickOriginX = ui.x;
+        this._joystickOriginY = ui.y;
+        this._moveInput.set(0, 0);
+        this._drawJoystick();
     }
 
-    private _onJoystickMove(event: EventTouch): void {
+    private _onScreenTouchMove(event: EventTouch): void {
         if (this._joystickTouchId !== event.getID()) return;
-
-        this._updateJoystickFromTouch(event);
+        this._updateMoveFromScreenTouch(event);
     }
 
-    private _onJoystickEnd(event: EventTouch): void {
+    private _onScreenTouchEnd(event: EventTouch): void {
         if (this._joystickTouchId !== event.getID()) return;
-
         this._joystickTouchId = null;
         this._moveInput.set(0, 0);
         this._drawJoystick();
     }
 
-    private _updateJoystickFromTouch(event: EventTouch): void {
-        if (!this._joystickBase) return;
-
-        const location = event.getUILocation();
-        const center = this._joystickBase.worldPosition;
-        const raw = new Vec2(location.x - center.x, location.y - center.y);
+    /** Finger drag relative to touch-down → normalized move vector. */
+    private _updateMoveFromScreenTouch(event: EventTouch): void {
+        const ui = event.getUILocation();
+        const dx = ui.x - this._joystickOriginX;
+        const dy = ui.y - this._joystickOriginY;
+        const raw = new Vec2(dx, dy);
         const length = raw.length();
-        const clamped = length > JOYSTICK_RADIUS ? raw.multiplyScalar(JOYSTICK_RADIUS / length) : raw;
-        this._moveInput.set(clamped.x / JOYSTICK_RADIUS, clamped.y / JOYSTICK_RADIUS);
+        // Slightly larger dead-zone radius in screen px so tiny jitter doesn't twitch.
+        const radius = Math.max(48, JOYSTICK_RADIUS * 1.35);
+        if (length < 8) {
+            this._moveInput.set(0, 0);
+            this._drawJoystick();
+            return;
+        }
+        const clamped = length > radius ? raw.multiplyScalar(radius / length) : raw;
+        this._moveInput.set(clamped.x / radius, clamped.y / radius);
         this._drawJoystick();
     }
 
@@ -3106,10 +3377,27 @@ export class RuntimeEntry extends Component {
     private _syncKeyboardInput(): void {
         let x = 0;
         let y = 0;
-        if (this._pressedKeys.has(KeyCode.KEY_A) || this._pressedKeys.has(KeyCode.ARROW_LEFT)) x -= 1;
-        if (this._pressedKeys.has(KeyCode.KEY_D) || this._pressedKeys.has(KeyCode.ARROW_RIGHT)) x += 1;
-        if (this._pressedKeys.has(KeyCode.KEY_W) || this._pressedKeys.has(KeyCode.ARROW_UP)) y += 1;
-        if (this._pressedKeys.has(KeyCode.KEY_S) || this._pressedKeys.has(KeyCode.ARROW_DOWN)) y -= 1;
+        // WASD + arrows + numpad (browser preview often loses focus; still help when focused).
+        if (
+            this._pressedKeys.has(KeyCode.KEY_A)
+            || this._pressedKeys.has(KeyCode.ARROW_LEFT)
+            || this._pressedKeys.has(KeyCode.NUM_4)
+        ) x -= 1;
+        if (
+            this._pressedKeys.has(KeyCode.KEY_D)
+            || this._pressedKeys.has(KeyCode.ARROW_RIGHT)
+            || this._pressedKeys.has(KeyCode.NUM_6)
+        ) x += 1;
+        if (
+            this._pressedKeys.has(KeyCode.KEY_W)
+            || this._pressedKeys.has(KeyCode.ARROW_UP)
+            || this._pressedKeys.has(KeyCode.NUM_8)
+        ) y += 1;
+        if (
+            this._pressedKeys.has(KeyCode.KEY_S)
+            || this._pressedKeys.has(KeyCode.ARROW_DOWN)
+            || this._pressedKeys.has(KeyCode.NUM_2)
+        ) y -= 1;
 
         this._keyboardInput.set(x, y);
         if (this._keyboardInput.length() > 1) {
@@ -3425,27 +3713,30 @@ export class RuntimeEntry extends Component {
         } else {
             this._drawPlayerModel(graphics, this._playerX, this._playerY, 1.16, this._shieldTimer > 0);
         }
-
+        // Keep weapon anim overlay glued to player even between attack ticks.
+        if (this._weaponAnimPlaying) this._syncWeaponAnimTransform();
     }
 
     private _drawLoadoutPreview(): void {
         const graphics = this._loadoutPreviewGraphics;
         if (!graphics) return;
 
+        const halfW = 150;
+        const halfH = 160;
         graphics.clear();
         graphics.fillColor = new Color(14, 19, 32, 255);
-        graphics.roundRect(-139, -133, 278, 266, 8);
+        graphics.roundRect(-halfW, -halfH, halfW * 2, halfH * 2, 12);
         graphics.fill();
-        graphics.fillColor = new Color(32, 42, 63, 155);
-        graphics.roundRect(-118, -102, 236, 28, 6);
+        graphics.fillColor = new Color(32, 42, 63, 120);
+        graphics.roundRect(-halfW + 16, -halfH + 14, halfW * 2 - 32, 22, 6);
         graphics.fill();
         graphics.strokeColor = new Color(92, 120, 158, 190);
         graphics.lineWidth = 2;
-        graphics.roundRect(-139, -133, 278, 266, 8);
+        graphics.roundRect(-halfW, -halfH, halfW * 2, halfH * 2, 12);
         graphics.stroke();
 
         if (!this._syncLoadoutPreviewSprite()) {
-            this._drawPlayerModel(graphics, -8, -22, 3.35, false);
+            this._drawPlayerModel(graphics, 0, 6, 3.5, false);
         }
     }
 
@@ -3469,8 +3760,13 @@ export class RuntimeEntry extends Component {
             ? Math.sin(Math.min(1, Math.max(0, actionProgress)) * Math.PI)
             : 0;
         const scale = 1 + actionPower * 0.045;
+        // Mild forward lunge during attack multi-frame.
+        const lunge = actionPower * 4;
+        const facingLen = Math.max(0.001, Math.hypot(this._facingX, this._facingY));
+        const lungeX = (this._facingX / facingLen) * lunge;
+        const lungeY = (this._facingY / facingLen) * lunge;
         const facingScale = this._facingX < -0.08 ? -scale : scale;
-        node.setPosition(this._playerX, this._playerY, 0);
+        node.setPosition(this._playerX + lungeX, this._playerY + lungeY, 0);
         node.setScale(facingScale, scale, 1);
         return true;
     }
@@ -3489,8 +3785,9 @@ export class RuntimeEntry extends Component {
         node.active = active;
         if (active) {
             if (sprite && frame) sprite.spriteFrame = frame;
-            node.setPosition(-8, -14, 0);
+            node.setPosition(0, 8, 0);
             node.setScale(1, 1, 1);
+            node.getComponent(UITransform)?.setContentSize(248, 248);
         }
         return active;
     }
@@ -4555,23 +4852,32 @@ export class RuntimeEntry extends Component {
     private _drawJoystick(): void {
         if (this._joystickBaseGraphics) {
             this._joystickBaseGraphics.clear();
-            this._joystickBaseGraphics.fillColor = new Color(56, 66, 84, 135);
-            this._joystickBaseGraphics.circle(0, 0, JOYSTICK_RADIUS);
+            // Always draw a readable base so the stick is never “missing” in battle.
+            this._joystickBaseGraphics.fillColor = new Color(24, 32, 48, 150);
+            this._joystickBaseGraphics.circle(0, 0, JOYSTICK_RADIUS + 8);
             this._joystickBaseGraphics.fill();
-            this._joystickBaseGraphics.strokeColor = new Color(132, 154, 188, 185);
-            this._joystickBaseGraphics.lineWidth = 2;
+            this._joystickBaseGraphics.strokeColor = new Color(120, 190, 255, 210);
+            this._joystickBaseGraphics.lineWidth = 3;
             this._joystickBaseGraphics.circle(0, 0, JOYSTICK_RADIUS);
+            this._joystickBaseGraphics.stroke();
+            this._joystickBaseGraphics.strokeColor = new Color(80, 120, 170, 120);
+            this._joystickBaseGraphics.lineWidth = 1.5;
+            this._joystickBaseGraphics.circle(0, 0, JOYSTICK_RADIUS * 0.45);
             this._joystickBaseGraphics.stroke();
         }
 
         if (this._joystickKnob) {
-            this._joystickKnob.setPosition(this._moveInput.x * 38, this._moveInput.y * 38, 0);
+            this._joystickKnob.setPosition(this._moveInput.x * 40, this._moveInput.y * 40, 0);
         }
         if (this._joystickKnobGraphics) {
             this._joystickKnobGraphics.clear();
-            this._joystickKnobGraphics.fillColor = new Color(238, 174, 72, 230);
+            this._joystickKnobGraphics.fillColor = new Color(238, 174, 72, 240);
             this._joystickKnobGraphics.circle(0, 0, 22);
             this._joystickKnobGraphics.fill();
+            this._joystickKnobGraphics.strokeColor = new Color(255, 230, 160, 220);
+            this._joystickKnobGraphics.lineWidth = 2;
+            this._joystickKnobGraphics.circle(0, 0, 22);
+            this._joystickKnobGraphics.stroke();
         }
     }
 

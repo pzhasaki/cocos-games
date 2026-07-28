@@ -121,10 +121,17 @@ export class UIManager extends Component {
     public flashNode: Node | null = null;
 
     protected onLoad(): void {
+        // RuntimeEntry owns the live Mind Dungeon UI. Do not spawn the old
+        // Start/Battle fallback panels — they sit on Canvas and steal touches.
+        if (this.node.getComponent('RuntimeEntry')) {
+            this.enabled = false;
+            return;
+        }
         this._ensureFallbackUI();
     }
 
     protected start(): void {
+        if (!this.enabled) return;
         this._ensureFallbackUI();
         this._registerEvents();
         this._setupButtons();

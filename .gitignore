@@ -10,3 +10,6 @@ extensions/cocos-mcp-server/
 settings/tool-manager.json
 *.log
 .DS_Store
+
+# Local imagegen batches (may contain API keys)
+Rollvive/output/imagegen/
